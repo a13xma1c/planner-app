@@ -7,16 +7,17 @@ import { renderWithProviders } from '@/test/utils'
 
 import { AppShell } from './AppShell'
 
-function Shell({ route = '/' }: { route?: string } = {}) {
+function Shell({ route = '/w/1' }: { route?: string } = {}) {
   return renderWithProviders(
-    <Routes>
-      <Route element={<AppShell />}>
-        <Route index element={<h1>Home page</h1>} />
-        <Route path="tasks" element={<h1>Tasks page</h1>} />
-        <Route path="board" element={<h1>Board page</h1>} />
-        <Route path="projects/:id" element={<h1>Project page</h1>} />
-      </Route>
-    </Routes>,
+    <AppShell>
+      <Routes>
+        <Route path="/w/:wid" element={<h1>Home page</h1>} />
+        <Route path="/w/:wid/tasks" element={<h1>Tasks page</h1>} />
+        <Route path="/w/:wid/board" element={<h1>Board page</h1>} />
+        <Route path="/w/:wid/members" element={<h1>Members page</h1>} />
+        <Route path="/w/:wid/projects/:id" element={<h1>Project page</h1>} />
+      </Routes>
+    </AppShell>,
     { route },
   )
 }
@@ -27,7 +28,7 @@ describe('AppShell', () => {
     seedProject({ name: 'Alpha' })
     Shell()
     const nav = screen.getByRole('navigation', { name: 'Main navigation' })
-    expect(within(nav).getByRole('link', { name: /Dashboard/ })).toHaveAttribute('href', '/')
+    expect(within(nav).getByRole('link', { name: /Dashboard/ })).toHaveAttribute('href', '/w/1')
     expect(
       await within(screen.getByTestId('sidebar-projects')).findByText('Alpha'),
     ).toBeInTheDocument()
@@ -39,7 +40,7 @@ describe('AppShell', () => {
 
   it('opens the task panel from ?task= and closes it', async () => {
     const t = seedTask({ title: 'Panel me' })
-    const { user } = Shell({ route: `/tasks?task=${t.id}` })
+    const { user } = Shell({ route: `/w/1/tasks?task=${t.id}` })
     expect(await screen.findByLabelText('Task title')).toHaveValue('Panel me')
     await user.click(screen.getByRole('button', { name: 'Close panel' }))
     await waitFor(() => expect(screen.queryByTestId('task-panel')).not.toBeInTheDocument())

@@ -5,7 +5,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
@@ -14,6 +14,8 @@ export default defineConfig({
     port: 5173,
     // During development the FastAPI backend runs on :8000.
     proxy: { '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true } },
+    // Tests import shared fixtures from ../backend; never widen this for the dev server.
+    fs: { allow: mode === 'test' ? ['..'] : ['.'] },
   },
   build: {
     sourcemap: false,
@@ -42,4 +44,4 @@ export default defineConfig({
       exclude: ['src/test/**', 'src/main.tsx', 'src/**/*.test.{ts,tsx}', 'src/api/types.ts'],
     },
   },
-})
+}))

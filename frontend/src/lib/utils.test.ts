@@ -6,6 +6,7 @@ describe('utils', () => {
   it('cn merges classes and ignores falsy values', () => {
     const hidden = false as boolean
     expect(cn('a', hidden && 'b', undefined, 'c')).toBe('a c')
+    expect(cn('w-full px-2', 'w-auto')).toBe('px-2 w-auto')
   })
 
   it('pluralize', () => {

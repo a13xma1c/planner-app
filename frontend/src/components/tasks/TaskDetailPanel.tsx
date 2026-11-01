@@ -12,17 +12,20 @@ import {
   type Status,
   type Task,
 } from '@/api/types'
-import { formatDateTime, formatLongDate } from '@/lib/dates'
+import { addDaysISO, formatDateTime, formatLongDate, todayISO } from '@/lib/dates'
 import { PRIORITY_META, RECURRENCE_META, STATUS_META } from '@/lib/meta'
 import { useHotkeys } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
+import { useWorkspace } from '@/lib/workspaceContext'
 
 import { Button } from '../ui/Button'
 import { ConfirmDialog } from '../ui/Dialog'
 import { Field, Input, Select, Textarea } from '../ui/Input'
 import { ErrorState, PageLoader } from '../ui/Misc'
 import { useToast } from '../ui/toastContext'
+import { Avatar } from '../workspace/Avatar'
 import { DueBadge } from './badges'
+import { Comments } from './Comments'
 import { SubtaskList } from './SubtaskList'
 import { TagInput } from './TagInput'
 import { useTaskActions } from './useTaskActions'
@@ -72,8 +75,9 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
 
 function TaskEditor({ task, onClose }: { task: Task; onClose: () => void }) {
   const toast = useToast()
-  const { patch, patchAsync, removeAsync, toggleDone } = useTaskActions()
+  const { patch, patchAsync, removeWithUndo, toggleDone } = useTaskActions()
   const { data: projects = [] } = useProjects(false)
+  const { path, members, isShared, canEdit } = useWorkspace()
   const [title, setTitle] = useState(task.title)
   const [notes, setNotes] = useState(task.notes)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -114,6 +118,7 @@ function TaskEditor({ task, onClose }: { task: Task; onClose: () => void }) {
             size="sm"
             onClick={() => toggleDone(task)}
             data-testid="panel-toggle-done"
+            disabled={!canEdit}
           >
             {done ? (
               <>
@@ -128,43 +133,50 @@ function TaskEditor({ task, onClose }: { task: Task; onClose: () => void }) {
           <span className="text-xs text-slate-400">#{task.id}</span>
         </div>
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Duplicate task"
-            title="Duplicate"
-            onClick={() =>
-              duplicate.mutate({
-                title: `${task.title} (copy)`,
-                notes: task.notes,
-                project_id: task.project_id,
-                priority: task.priority,
-                due_date: task.due_date,
-                recurrence: task.recurrence,
-                estimate_minutes: task.estimate_minutes,
-                tags: task.tags.map((t) => t.name),
-                subtasks: task.subtasks.map((s) => s.title),
-              })
-            }
-          >
-            <Copy className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Delete task"
-            title="Delete"
-            onClick={() => setConfirmDelete(true)}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          {canEdit && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Duplicate task"
+              title="Duplicate"
+              onClick={() =>
+                duplicate.mutate({
+                  title: `${task.title} (copy)`,
+                  notes: task.notes,
+                  project_id: task.project_id,
+                  priority: task.priority,
+                  due_date: task.due_date,
+                  recurrence: task.recurrence,
+                  estimate_minutes: task.estimate_minutes,
+                  tags: task.tags.map((t) => t.name),
+                  subtasks: task.subtasks.map((s) => s.title),
+                })
+              }
+            >
+              <Copy className="h-4 w-4" />
+            </Button>
+          )}
+          {canEdit && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Delete task"
+              title="Delete"
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
           <Button variant="ghost" size="icon" aria-label="Close panel" onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
         </div>
       </header>
 
-      <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4">
+      <fieldset
+        disabled={!canEdit}
+        className="min-w-0 flex-1 space-y-5 overflow-y-auto px-4 py-4 disabled:opacity-90"
+      >
         <input
           ref={titleRef}
           value={title}
@@ -245,6 +257,28 @@ function TaskEditor({ task, onClose }: { task: Task; onClose: () => void }) {
                 </Button>
               )}
             </div>
+            <div className="mt-1 flex flex-wrap gap-1" aria-label="Due date shortcuts">
+              {[
+                ['Today', todayISO()],
+                ['Tomorrow', addDaysISO(1)],
+                ['Next week', addDaysISO(7)],
+              ].map(([label, iso]) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => patch(task.id, { due_date: iso })}
+                  aria-pressed={task.due_date === iso}
+                  className={cn(
+                    'rounded-full border px-2 py-0.5 text-[11px] transition-colors',
+                    task.due_date === iso
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300'
+                      : 'border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </Field>
           <Field label="Repeat" htmlFor="f-recurrence">
             <Select
@@ -262,6 +296,24 @@ function TaskEditor({ task, onClose }: { task: Task; onClose: () => void }) {
               ))}
             </Select>
           </Field>
+          {isShared && (
+            <Field label="Assignee" htmlFor="f-assignee">
+              <Select
+                id="f-assignee"
+                value={task.assignee_id ?? ''}
+                onChange={(e) =>
+                  patch(task.id, { assignee_id: e.target.value ? Number(e.target.value) : null })
+                }
+              >
+                <option value="">Unassigned</option>
+                {members.map((m) => (
+                  <option key={m.user.id} value={m.user.id}>
+                    {m.user.display_name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
           <Field label="Estimate (minutes)" htmlFor="f-estimate">
             <Input
               id="f-estimate"
@@ -306,6 +358,8 @@ function TaskEditor({ task, onClose }: { task: Task; onClose: () => void }) {
 
         <SubtaskList taskId={task.id} subtasks={task.subtasks} />
 
+        <Comments taskId={task.id} />
+
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-slate-200 pt-3 text-[11px] text-slate-500 dark:border-slate-700">
           <dt>Created</dt>
           <dd>{formatDateTime(task.created_at)}</dd>
@@ -317,12 +371,20 @@ function TaskEditor({ task, onClose }: { task: Task; onClose: () => void }) {
               <dd>{formatDateTime(task.completed_at)}</dd>
             </>
           )}
+          {task.created_by && (
+            <>
+              <dt>Created by</dt>
+              <dd className="flex items-center gap-1">
+                <Avatar user={task.created_by} size="xs" /> {task.created_by.display_name}
+              </dd>
+            </>
+          )}
           {task.project && (
             <>
               <dt>Project</dt>
               <dd>
                 <Link
-                  to={`/projects/${task.project.id}`}
+                  to={path(`/projects/${task.project.id}`)}
                   className="inline-flex items-center gap-1 hover:underline"
                 >
                   {task.project.name} <ExternalLink className="h-3 w-3" />
@@ -331,14 +393,14 @@ function TaskEditor({ task, onClose }: { task: Task; onClose: () => void }) {
             </>
           )}
         </dl>
-      </div>
+      </fieldset>
 
       <ConfirmDialog
         open={confirmDelete}
         onClose={() => setConfirmDelete(false)}
         onConfirm={async () => {
           setConfirmDelete(false)
-          await removeAsync(task.id)
+          await removeWithUndo(task)
           onClose()
         }}
         title="Delete this task?"

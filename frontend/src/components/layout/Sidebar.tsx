@@ -9,19 +9,24 @@ import {
   Settings,
   Sun,
   Tags,
+  UserCheck,
+  Users,
   X,
 } from 'lucide-react'
 import { NavLink } from 'react-router'
 
-import { useOverview, useProjects } from '@/api/queries'
+import { useOverview, useProjects, useTasks } from '@/api/queries'
+import { useWorkspace } from '@/lib/workspaceContext'
 import { cn } from '@/lib/utils'
 
 import { Button } from '../ui/Button'
+import { WorkspaceSwitcher } from '../workspace/WorkspaceSwitcher'
 
 interface SidebarProps {
   open: boolean
   onClose: () => void
   onNewProject: () => void
+  onNewWorkspace: () => void
 }
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -74,9 +79,11 @@ function Count({
   )
 }
 
-export function Sidebar({ open, onClose, onNewProject }: SidebarProps) {
+export function Sidebar({ open, onClose, onNewProject, onNewWorkspace }: SidebarProps) {
+  const { path, isShared, canEdit, workspace } = useWorkspace()
   const { data: projects = [] } = useProjects(false)
   const { data: stats } = useOverview()
+  const { data: assigned = [] } = useTasks({ assigned_to_me: true, include_done: false }, isShared)
   const inboxCount = stats?.projects.find((p) => p.id === null)
   const todayCount = (stats?.due_today ?? 0) + (stats?.overdue ?? 0)
 
@@ -99,7 +106,7 @@ export function Sidebar({ open, onClose, onNewProject }: SidebarProps) {
       >
         <div className="flex h-14 items-center justify-between px-4">
           <NavLink
-            to="/"
+            to={path()}
             className="flex items-center gap-2 font-semibold text-slate-900 dark:text-white"
             onClick={onClose}
           >
@@ -119,31 +126,39 @@ export function Sidebar({ open, onClose, onNewProject }: SidebarProps) {
           </Button>
         </div>
 
+        <WorkspaceSwitcher onNewWorkspace={onNewWorkspace} />
+
         <div className="flex-1 space-y-6 overflow-y-auto px-3 pb-4">
           <ul className="space-y-0.5">
-            <NavItem to="/" end onClick={onClose}>
+            <NavItem to={path()} end onClick={onClose}>
               <LayoutDashboard className="h-4 w-4" /> Dashboard
             </NavItem>
-            <NavItem to="/inbox" onClick={onClose}>
+            {isShared && (
+              <NavItem to={path('/assigned')} onClick={onClose}>
+                <UserCheck className="h-4 w-4" /> Assigned to me
+                <Count value={assigned.length} />
+              </NavItem>
+            )}
+            <NavItem to={path('/inbox')} onClick={onClose}>
               <Inbox className="h-4 w-4" /> Inbox
               <Count value={inboxCount ? inboxCount.total - inboxCount.done : 0} />
             </NavItem>
-            <NavItem to="/today" onClick={onClose}>
+            <NavItem to={path('/today')} onClick={onClose}>
               <Sun className="h-4 w-4" /> Today
               <Count value={todayCount} tone={stats?.overdue ? 'danger' : 'default'} />
             </NavItem>
-            <NavItem to="/upcoming" onClick={onClose}>
+            <NavItem to={path('/upcoming')} onClick={onClose}>
               <CalendarRange className="h-4 w-4" /> Upcoming
               <Count value={stats?.due_this_week} />
             </NavItem>
-            <NavItem to="/tasks" onClick={onClose}>
+            <NavItem to={path('/tasks')} onClick={onClose}>
               <ListTodo className="h-4 w-4" /> All tasks
               <Count value={stats?.open} />
             </NavItem>
-            <NavItem to="/board" onClick={onClose}>
+            <NavItem to={path('/board')} onClick={onClose}>
               <Kanban className="h-4 w-4" /> Board
             </NavItem>
-            <NavItem to="/calendar" onClick={onClose}>
+            <NavItem to={path('/calendar')} onClick={onClose}>
               <CalendarDays className="h-4 w-4" /> Calendar
             </NavItem>
           </ul>
@@ -151,27 +166,29 @@ export function Sidebar({ open, onClose, onNewProject }: SidebarProps) {
           <div>
             <div className="mb-1 flex items-center justify-between px-2.5">
               <NavLink
-                to="/projects"
+                to={path('/projects')}
                 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
                 onClick={onClose}
               >
                 Projects
               </NavLink>
-              <button
-                type="button"
-                onClick={onNewProject}
-                aria-label="New project"
-                className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={onNewProject}
+                  aria-label="New project"
+                  className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
             <ul className="space-y-0.5" data-testid="sidebar-projects">
               {projects.length === 0 && (
                 <li className="px-2.5 py-1 text-xs text-slate-400">No projects yet</li>
               )}
               {projects.map((p) => (
-                <NavItem key={p.id} to={`/projects/${p.id}`} onClick={onClose}>
+                <NavItem key={p.id} to={path(`/projects/${p.id}`)} onClick={onClose}>
                   <span
                     className="h-2.5 w-2.5 shrink-0 rounded-full"
                     style={{ backgroundColor: p.color }}
@@ -189,10 +206,14 @@ export function Sidebar({ open, onClose, onNewProject }: SidebarProps) {
 
         <div className="border-t border-slate-200 p-3 dark:border-slate-800">
           <ul className="space-y-0.5">
-            <NavItem to="/tags" onClick={onClose}>
+            <NavItem to={path('/members')} onClick={onClose}>
+              <Users className="h-4 w-4" /> Members
+              <Count value={workspace.member_count > 1 ? workspace.member_count : 0} />
+            </NavItem>
+            <NavItem to={path('/tags')} onClick={onClose}>
               <Tags className="h-4 w-4" /> Tags
             </NavItem>
-            <NavItem to="/settings" onClick={onClose}>
+            <NavItem to={path('/settings')} onClick={onClose}>
               <Settings className="h-4 w-4" /> Settings
             </NavItem>
           </ul>

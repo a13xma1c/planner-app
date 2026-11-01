@@ -23,10 +23,24 @@ from planner.services.errors import ValidationError
 from planner.services.tags import get_or_create_tags
 
 
-async def export_all(session: AsyncSession) -> ExportBundle:
-    projects = (await session.scalars(select(Project).order_by(Project.id))).all()
-    tags = (await session.scalars(select(Tag).order_by(Tag.id))).all()
-    tasks = (await session.scalars(select(Task).order_by(Task.id))).unique().all()
+async def export_all(session: AsyncSession, workspace_id: int) -> ExportBundle:
+    projects = (
+        await session.scalars(
+            select(Project).where(Project.workspace_id == workspace_id).order_by(Project.id)
+        )
+    ).all()
+    tags = (
+        await session.scalars(select(Tag).where(Tag.workspace_id == workspace_id).order_by(Tag.id))
+    ).all()
+    tasks = (
+        (
+            await session.scalars(
+                select(Task).where(Task.workspace_id == workspace_id).order_by(Task.id)
+            )
+        )
+        .unique()
+        .all()
+    )
     return ExportBundle(
         exported_at=datetime.now(UTC),
         projects=[ProjectRead.model_validate(p) for p in projects],
@@ -35,12 +49,13 @@ async def export_all(session: AsyncSession) -> ExportBundle:
     )
 
 
-async def _clear_all(session: AsyncSession) -> None:
-    await session.execute(delete(task_tags))
-    await session.execute(delete(Subtask))
-    await session.execute(delete(Task))
-    await session.execute(delete(Tag))
-    await session.execute(delete(Project))
+async def _clear_all(session: AsyncSession, workspace_id: int) -> None:
+    task_ids = select(Task.id).where(Task.workspace_id == workspace_id)
+    await session.execute(delete(task_tags).where(task_tags.c.task_id.in_(task_ids)))
+    await session.execute(delete(Subtask).where(Subtask.task_id.in_(task_ids)))
+    await session.execute(delete(Task).where(Task.workspace_id == workspace_id))
+    await session.execute(delete(Tag).where(Tag.workspace_id == workspace_id))
+    await session.execute(delete(Project).where(Project.workspace_id == workspace_id))
     await session.flush()
 
 
@@ -77,7 +92,7 @@ def _enum_or(enum_cls: type[Any], value: Any, default: Any, warnings: list[str],
 
 
 async def import_bundle(
-    session: AsyncSession, bundle: ImportBundle, *, replace: bool = False
+    session: AsyncSession, workspace_id: int, bundle: ImportBundle, *, replace: bool = False
 ) -> ImportResult:
     """Import a bundle previously produced by :func:`export_all`.
 
@@ -88,7 +103,7 @@ async def import_bundle(
         raise ValidationError(f"Unsupported bundle version {bundle.version}")
     warnings: list[str] = []
     if replace:
-        await _clear_all(session)
+        await _clear_all(session, workspace_id)
 
     project_map: dict[int | None, int | None] = {None: None}
     new_projects = 0
@@ -97,9 +112,12 @@ async def import_bundle(
         if not name:
             warnings.append("Skipped project without a name")
             continue
-        existing = await session.scalar(select(Project).where(Project.name == name))
+        existing = await session.scalar(
+            select(Project).where(Project.workspace_id == workspace_id, Project.name == name)
+        )
         if existing is None:
             existing = Project(
+                workspace_id=workspace_id,
                 name=name,
                 description=str(raw.get("description") or ""),
                 color=str(raw.get("color") or "#6366f1"),
@@ -115,9 +133,13 @@ async def import_bundle(
         name = str(raw.get("name", "")).strip().lstrip("#").lower()
         if not name:
             continue
-        existing = await session.scalar(select(Tag).where(Tag.name == name))
-        if existing is None:
-            session.add(Tag(name=name, color=str(raw.get("color") or "#64748b")))
+        tag = await session.scalar(
+            select(Tag).where(Tag.workspace_id == workspace_id, Tag.name == name)
+        )
+        if tag is None:
+            session.add(
+                Tag(workspace_id=workspace_id, name=name, color=str(raw.get("color") or "#64748b"))
+            )
             new_tags += 1
     await session.flush()
 
@@ -131,6 +153,7 @@ async def import_bundle(
         label = f"Task '{title[:30]}'"
         status = _enum_or(Status, raw.get("status"), Status.TODO, warnings, label)
         task = Task(
+            workspace_id=workspace_id,
             title=title[:200],
             notes=str(raw.get("notes") or ""),
             project_id=project_map.get(raw.get("project_id")),
@@ -148,7 +171,7 @@ async def import_bundle(
         if status == Status.DONE and task.completed_at is None:
             task.completed_at = created or datetime.now(UTC).replace(tzinfo=None)
         tag_names = [t["name"] if isinstance(t, dict) else str(t) for t in raw.get("tags") or []]
-        task.tags = await get_or_create_tags(session, tag_names)
+        task.tags = await get_or_create_tags(session, workspace_id, tag_names)
         for i, sub in enumerate(raw.get("subtasks") or []):
             sub_title = (sub.get("title") if isinstance(sub, dict) else str(sub)) or ""
             if not str(sub_title).strip():
@@ -179,7 +202,9 @@ LEGACY_PRIORITY = {"low": Priority.LOW, "medium": Priority.MEDIUM, "high": Prior
 LEGACY_STATUS = {"todo": Status.TODO, "in_progress": Status.IN_PROGRESS, "done": Status.DONE}
 
 
-async def import_legacy(session: AsyncSession, payload: dict[str, Any]) -> ImportResult:
+async def import_legacy(
+    session: AsyncSession, workspace_id: int, payload: dict[str, Any]
+) -> ImportResult:
     """Import the ``planner_data.json`` format of the original CLI application.
 
     Legacy shape::
@@ -201,9 +226,13 @@ async def import_legacy(session: AsyncSession, payload: dict[str, Any]) -> Impor
         name = str(raw.get("name", "")).strip()
         if not name or name.lower() == "inbox":
             continue
-        existing = await session.scalar(select(Project).where(Project.name == name))
+        existing = await session.scalar(
+            select(Project).where(Project.workspace_id == workspace_id, Project.name == name)
+        )
         if existing is None:
-            existing = Project(name=name, description=str(raw.get("description") or ""))
+            existing = Project(
+                workspace_id=workspace_id, name=name, description=str(raw.get("description") or "")
+            )
             session.add(existing)
             await session.flush()
             new_projects += 1
@@ -219,10 +248,13 @@ async def import_legacy(session: AsyncSession, payload: dict[str, Any]) -> Impor
         project_name = str(raw.get("project") or "Inbox").strip() or "Inbox"
         if project_name.lower() not in projects_by_name:
             project = await session.scalar(
-                select(Project).where(func.lower(Project.name) == project_name.lower())
+                select(Project).where(
+                    Project.workspace_id == workspace_id,
+                    func.lower(Project.name) == project_name.lower(),
+                )
             )
             if project is None:
-                project = Project(name=project_name)
+                project = Project(workspace_id=workspace_id, name=project_name)
                 session.add(project)
                 await session.flush()
                 new_projects += 1
@@ -236,6 +268,7 @@ async def import_legacy(session: AsyncSession, payload: dict[str, Any]) -> Impor
             warnings.append(f"{label}: unknown priority {priority_raw!r}, using 'medium'")
         status = LEGACY_STATUS.get(status_raw, Status.TODO)
         task = Task(
+            workspace_id=workspace_id,
             title=title[:200],
             notes=str(raw.get("notes") or ""),
             project_id=projects_by_name[project_name.lower()],

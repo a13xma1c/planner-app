@@ -16,23 +16,25 @@ import { useToast } from '@/components/ui/toastContext'
 import { addDaysISO, dayHeading, formatLongDate, parseDate, todayISO } from '@/lib/dates'
 import { filtersToParams, filtersToQuery, parseFilters, type FilterState } from '@/lib/filters'
 import { useTaskPanel } from '@/lib/taskPanel'
+import { useWorkspace } from '@/lib/workspaceContext'
 import { useUrlState } from '@/lib/useUrlState'
 import { pluralize } from '@/lib/utils'
 
-export type TasksMode = 'all' | 'inbox' | 'today' | 'upcoming' | 'project'
+export type TasksMode = 'all' | 'inbox' | 'today' | 'upcoming' | 'assigned' | 'project'
 
 const TITLES: Record<Exclude<TasksMode, 'project'>, { title: string; subtitle: string }> = {
   all: { title: 'All tasks', subtitle: 'Everything, across every project.' },
   inbox: { title: 'Inbox', subtitle: 'Tasks that are not assigned to a project.' },
   today: { title: 'Today', subtitle: 'Due today, plus anything overdue.' },
   upcoming: { title: 'Upcoming', subtitle: 'The next two weeks, day by day.' },
+  assigned: { title: 'Assigned to me', subtitle: 'Everything this planner expects from you.' },
 }
 
 export function TasksPage({ mode }: { mode: TasksMode }) {
   const params = useParams()
   const projectId = mode === 'project' ? Number(params.projectId) : undefined
   if (mode === 'project' && (!projectId || Number.isNaN(projectId)))
-    return <Navigate to="/projects" replace />
+    return <Navigate to=".." replace />
   return <TasksView key={`${mode}-${projectId ?? ''}`} mode={mode} projectId={projectId} />
 }
 
@@ -43,6 +45,7 @@ function TasksView({ mode, projectId }: { mode: TasksMode; projectId?: number })
   const [today] = useState(() => todayISO())
   const { open } = useTaskPanel()
   const { toggleDone } = useTaskActions()
+  const { path, canEdit } = useWorkspace()
 
   const dueParam = searchParams.get('due')
   const due = dueParam && /^\d{4}-\d{2}-\d{2}$/.test(dueParam) ? dueParam : null
@@ -57,6 +60,8 @@ function TasksView({ mode, projectId }: { mode: TasksMode; projectId?: number })
         return { ...base, project_id: projectId }
       case 'today':
         return { ...base, due_to: today }
+      case 'assigned':
+        return { ...base, assigned_to_me: true }
       case 'upcoming':
         return {
           ...base,
@@ -111,7 +116,13 @@ function TasksView({ mode, projectId }: { mode: TasksMode; projectId?: number })
       }
     />
   ) : mode === 'project' ? (
-    <ProjectHeader projectId={projectId!} project={project} count={tasks.length} />
+    <ProjectHeader
+      projectId={projectId!}
+      project={project}
+      count={tasks.length}
+      canEdit={canEdit}
+      path={path}
+    />
   ) : (
     <PageHeader title={TITLES[mode].title} subtitle={TITLES[mode].subtitle} />
   )
@@ -119,7 +130,12 @@ function TasksView({ mode, projectId }: { mode: TasksMode; projectId?: number })
   return (
     <div>
       {header}
-      <FilterBar value={filters} onChange={setFilters} hideStatus={mode === 'upcoming'} />
+      <FilterBar
+        value={filters}
+        onChange={setFilters}
+        hideStatus={mode === 'upcoming'}
+        hideAssignee={mode === 'assigned'}
+      />
       {isLoading && <PageLoader />}
       {error && <ErrorState error={error} retry={() => refetch()} />}
       {!isLoading && !error && (
@@ -131,12 +147,13 @@ function TasksView({ mode, projectId }: { mode: TasksMode; projectId?: number })
           onToggleSelect={toggleSelect}
           showProject={mode !== 'project'}
           groupBy={groupBy}
+          keyboard
           emptyTitle={mode === 'today' ? 'Nothing due today 🎉' : undefined}
           emptyDescription={filtersActive(filters) ? 'Try clearing some filters.' : undefined}
         />
       )}
       <BulkBar
-        selectedIds={visibleSelected}
+        selectedIds={canEdit ? visibleSelected : []}
         onClear={() => setSelected(new Set())}
         onSelectAll={() => setSelected(new Set(tasks.map((t) => t.id)))}
         total={tasks.length}
@@ -165,10 +182,14 @@ function ProjectHeader({
   projectId,
   project,
   count,
+  canEdit,
+  path,
 }: {
   projectId: number
   project: ProjectWithStats | undefined
   count: number
+  canEdit: boolean
+  path: (s: string) => string
 }) {
   const navigate = useNavigate()
   const toast = useToast()
@@ -180,7 +201,7 @@ function ProjectHeader({
   const remove = useDeleteProject({
     onSuccess: () => {
       toast.success('Project deleted', 'Its tasks were moved to the Inbox.')
-      navigate('/projects')
+      navigate(path('/projects'))
     },
     onError: (e) => toast.error('Could not delete project', e.message),
   })
@@ -203,33 +224,35 @@ function ProjectHeader({
         }
         subtitle={project.description || `${pluralize(count, 'task')} · ${project.done_count} done`}
         actions={
-          <>
-            <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
-              <Pencil className="h-3.5 w-3.5" /> Edit
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                update.mutate({ id: project.id, data: { is_archived: !project.is_archived } })
-              }
-            >
-              {project.is_archived ? (
-                <ArchiveRestore className="h-3.5 w-3.5" />
-              ) : (
-                <Archive className="h-3.5 w-3.5" />
-              )}
-              {project.is_archived ? 'Unarchive' : 'Archive'}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setConfirmDelete(true)}
-              aria-label="Delete project"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </>
+          canEdit && (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+                <Pencil className="h-3.5 w-3.5" /> Edit
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  update.mutate({ id: project.id, data: { is_archived: !project.is_archived } })
+                }
+              >
+                {project.is_archived ? (
+                  <ArchiveRestore className="h-3.5 w-3.5" />
+                ) : (
+                  <Archive className="h-3.5 w-3.5" />
+                )}
+                {project.is_archived ? 'Unarchive' : 'Archive'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setConfirmDelete(true)}
+                aria-label="Delete project"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          )
         }
       />
       <ProjectDialog open={editOpen} onClose={() => setEditOpen(false)} project={project} />

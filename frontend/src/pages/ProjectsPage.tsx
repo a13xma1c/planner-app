@@ -8,8 +8,10 @@ import { ProjectDialog } from '@/components/projects/ProjectDialog'
 import { Button } from '@/components/ui/Button'
 import { EmptyState, ErrorState, PageHeader, PageLoader, ProgressBar } from '@/components/ui/Misc'
 import { pluralize } from '@/lib/utils'
+import { useWorkspace } from '@/lib/workspaceContext'
 
 export function ProjectsPage() {
+  const { path, canEdit } = useWorkspace()
   const [showArchived, setShowArchived] = useState(false)
   const { data: projects = [], isLoading, error, refetch } = useProjects(true)
   const [editing, setEditing] = useState<Project | null | undefined>(undefined) // undefined = closed, null = new
@@ -35,9 +37,11 @@ export function ProjectsPage() {
                 Show archived
               </label>
             )}
-            <Button size="sm" onClick={() => setEditing(null)} data-testid="new-project-button">
-              <Plus className="h-4 w-4" /> New project
-            </Button>
+            {canEdit && (
+              <Button size="sm" onClick={() => setEditing(null)} data-testid="new-project-button">
+                <Plus className="h-4 w-4" /> New project
+              </Button>
+            )}
           </>
         }
       />
@@ -48,7 +52,11 @@ export function ProjectsPage() {
           icon={FolderKanban}
           title="No projects yet"
           description="Projects group related tasks. Use @Project in quick add once you have some."
-          action={<Button onClick={() => setEditing(null)}>Create your first project</Button>}
+          action={
+            canEdit ? (
+              <Button onClick={() => setEditing(null)}>Create your first project</Button>
+            ) : undefined
+          }
         />
       )}
       <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="project-grid">
@@ -57,7 +65,7 @@ export function ProjectsPage() {
           return (
             <li key={p.id}>
               <Link
-                to={`/projects/${p.id}`}
+                to={path(`/projects/${p.id}`)}
                 className="block h-full rounded-xl border border-slate-200 bg-white p-4 transition hover:border-indigo-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-950"
               >
                 <div className="mb-2 flex items-start justify-between gap-2">
@@ -70,16 +78,18 @@ export function ProjectsPage() {
                       {p.name}
                     </span>
                   </span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      setEditing(p)
-                    }}
-                    className="shrink-0 text-xs text-slate-400 hover:text-indigo-600"
-                  >
-                    Edit
-                  </button>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        setEditing(p)
+                      }}
+                      className="shrink-0 text-xs text-slate-400 hover:text-indigo-600"
+                    >
+                      Edit
+                    </button>
+                  )}
                 </div>
                 {p.description && (
                   <p className="mb-3 line-clamp-2 text-xs text-slate-500">{p.description}</p>

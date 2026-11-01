@@ -49,6 +49,22 @@ describe('useHotkeys', () => {
     input.remove()
   })
 
+  it('lets a handler decline so later hotkeys can take the key', () => {
+    const decline = vi.fn(() => false)
+    const accept = vi.fn()
+    renderHook(() =>
+      useHotkeys([
+        { combo: 'c', handler: decline },
+        { combo: 'c', handler: accept },
+      ]),
+    )
+    const event = new KeyboardEvent('keydown', { key: 'c', bubbles: true, cancelable: true })
+    window.dispatchEvent(event)
+    expect(decline).toHaveBeenCalled()
+    expect(accept).toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(true)
+  })
+
   it('removes the listener on unmount', () => {
     const handler = vi.fn()
     const { unmount } = renderHook(() => useHotkeys([{ combo: 'x', handler }]))

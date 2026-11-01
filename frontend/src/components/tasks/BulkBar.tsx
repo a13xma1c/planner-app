@@ -5,6 +5,7 @@ import { useBulk, useProjects } from '@/api/queries'
 import { PRIORITIES, type BulkRequest, type Priority } from '@/api/types'
 import { addDaysISO } from '@/lib/dates'
 import { PRIORITY_META } from '@/lib/meta'
+import { useWorkspace } from '@/lib/workspaceContext'
 
 import { Button } from '../ui/Button'
 import { ConfirmDialog } from '../ui/Dialog'
@@ -22,6 +23,7 @@ interface BulkBarProps {
 export function BulkBar({ selectedIds, onClear, onSelectAll, total }: BulkBarProps) {
   const toast = useToast()
   const { data: projects = [] } = useProjects(false)
+  const { members, isShared } = useWorkspace()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [tag, setTag] = useState('')
   const bulk = useBulk({
@@ -112,6 +114,28 @@ export function BulkBar({ selectedIds, onClear, onSelectAll, total }: BulkBarPro
         <option value="7">In a week</option>
         <option value="none">No date</option>
       </Select>
+      {isShared && (
+        <Select
+          aria-label="Assign to"
+          className="h-8 w-auto text-xs"
+          value=""
+          onChange={(e) => {
+            if (e.target.value === '') return
+            run({
+              action: 'assign',
+              assignee_id: e.target.value === 'none' ? null : Number(e.target.value),
+            })
+          }}
+        >
+          <option value="">Assign…</option>
+          {members.map((m) => (
+            <option key={m.user.id} value={m.user.id}>
+              {m.user.display_name}
+            </option>
+          ))}
+          <option value="none">Unassign</option>
+        </Select>
+      )}
       <form
         className="flex items-center gap-1"
         onSubmit={(e) => {

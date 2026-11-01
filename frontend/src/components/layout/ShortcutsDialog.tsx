@@ -22,6 +22,16 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
       [['G', 'A'], 'All tasks'],
       [['G', 'B'], 'Board'],
       [['G', 'C'], 'Calendar'],
+      [['G', 'M'], 'Members'],
+    ],
+  },
+  {
+    title: 'In task lists',
+    items: [
+      [['J', 'K'], 'Move the cursor down / up (also ↓ ↑)'],
+      [['Enter'], 'Open the highlighted task'],
+      [['X'], 'Select / deselect it'],
+      [['C'], 'Complete / reopen it'],
     ],
   },
   {

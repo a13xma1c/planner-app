@@ -1,22 +1,19 @@
-import { expect, test } from '@playwright/test'
-
 import {
   createProject,
   createTask,
+  expect,
   getTask,
   isoDaysFromNow,
   quickAdd,
-  resetDatabase,
-} from './helpers'
-
-test.beforeEach(async ({ request }) => resetDatabase(request))
+  test,
+} from './fixtures'
 
 test('quick-add parses natural language and the task shows up with badges', async ({
   page,
-  request,
+  ws,
 }) => {
-  await createProject(request, 'Home')
-  await page.goto('/tasks')
+  await createProject(page.request, 'Home')
+  await page.goto(`${ws}/tasks`)
   const input = page.getByLabel('Quick add task')
   await input.fill('Pay rent tomorrow !high #finance @Home ~1h')
   const preview = page.getByTestId('quick-add-preview')
@@ -35,12 +32,9 @@ test('quick-add parses natural language and the task shows up with badges', asyn
   await expect(input).toHaveValue('')
 })
 
-test('open, edit, complete and delete a task through the detail panel', async ({
-  page,
-  request,
-}) => {
-  const task = await createTask(request, { title: 'Edit me', notes: 'original' })
-  await page.goto('/tasks')
+test('open, edit, complete and delete a task through the detail panel', async ({ page, ws }) => {
+  const task = await createTask(page.request, { title: 'Edit me', notes: 'original' })
+  await page.goto(`${ws}/tasks`)
   await page.getByRole('button', { name: 'Open Edit me' }).click()
   await expect(page).toHaveURL(/task=\d+/)
   const panel = page.getByTestId('task-panel')
@@ -51,7 +45,7 @@ test('open, edit, complete and delete a task through the detail panel', async ({
   await expect(page.getByTestId('task-row').filter({ hasText: 'Edited title' })).toBeVisible()
 
   await panel.getByLabel('Priority').selectOption('urgent')
-  await panel.getByLabel('Due date').fill(isoDaysFromNow(0))
+  await panel.getByLabel('Due date', { exact: true }).fill(isoDaysFromNow(0))
   await expect(panel.getByText('Today', { exact: true })).toBeVisible()
 
   await panel.getByLabel('New subtask').fill('first step')
@@ -64,10 +58,14 @@ test('open, edit, complete and delete a task through the detail panel', async ({
   await panel.getByLabel('Tags').press('Enter')
   await expect(panel.getByText('#urgent-ish')).toBeVisible()
 
-  await expect.poll(async () => (await getTask(request, task.id)).status).toBe('todo')
+  await panel.getByLabel('New comment').fill('Note to self')
+  await panel.getByRole('button', { name: 'Comment' }).click()
+  await expect(panel.getByText('Note to self')).toBeVisible()
+
+  await expect.poll(async () => (await getTask(page.request, task.id)).status).toBe('todo')
   await panel.getByTestId('panel-toggle-done').click()
   await expect(panel.getByRole('button', { name: 'Reopen' })).toBeVisible()
-  await expect.poll(async () => (await getTask(request, task.id)).status).toBe('done')
+  await expect.poll(async () => (await getTask(page.request, task.id)).status).toBe('done')
 
   await panel.getByRole('button', { name: 'Delete task' }).click()
   await page
@@ -78,28 +76,28 @@ test('open, edit, complete and delete a task through the detail panel', async ({
   await expect(page.getByText('No tasks here')).toBeVisible()
 })
 
-test('completing a recurring task spawns the next occurrence', async ({ page, request }) => {
-  await createTask(request, {
+test('completing a recurring task spawns the next occurrence', async ({ page, ws }) => {
+  await createTask(page.request, {
     title: 'Water plants',
     recurrence: 'daily',
     due_date: isoDaysFromNow(0),
   })
-  await page.goto('/today')
+  await page.goto(`${ws}/today`)
   await page.getByRole('checkbox', { name: 'Complete Water plants' }).click()
   await expect(
     page.getByRole('status').filter({ hasText: 'Next occurrence: Tomorrow' }),
   ).toBeVisible()
-  await page.goto('/upcoming')
+  await page.goto(`${ws}/upcoming`)
   await expect(
     page.getByRole('region', { name: /^Tomorrow/ }).getByText('Water plants'),
   ).toBeVisible()
 })
 
-test('filters, search and bulk actions', async ({ page, request }) => {
-  await createTask(request, { title: 'Alpha report', priority: 'high' })
-  await createTask(request, { title: 'Beta cleanup', priority: 'low' })
-  await createTask(request, { title: 'Gamma done', status: 'done' })
-  await page.goto('/tasks')
+test('filters, search and bulk actions', async ({ page, ws }) => {
+  await createTask(page.request, { title: 'Alpha report', priority: 'high' })
+  await createTask(page.request, { title: 'Beta cleanup', priority: 'low' })
+  await createTask(page.request, { title: 'Gamma done', status: 'done' })
+  await page.goto(`${ws}/tasks`)
   const rows = page.getByTestId('task-row')
   await expect(rows).toHaveCount(2)
 
@@ -124,12 +122,12 @@ test('filters, search and bulk actions', async ({ page, request }) => {
   await page.getByRole('button', { name: 'Select all 2' }).click()
   await page.getByTestId('bulk-bar').getByRole('button', { name: 'Complete' }).click()
   await expect(page.getByText('No tasks here')).toBeVisible()
-  const r = await request.get('/api/tasks?status=done')
+  const r = await page.request.get('/api/tasks?status=done')
   expect((await r.json()).length).toBe(3)
 })
 
-test('the New task form creates a fully specified task', async ({ page, request }) => {
-  await page.goto('/')
+test('the New task form creates a fully specified task', async ({ page, ws }) => {
+  await page.goto(ws)
   await page.getByTestId('new-task-button').click()
   const dialog = page.getByRole('dialog', { name: 'New task' })
   await dialog.getByLabel('Title').fill('Formal task')
@@ -137,12 +135,49 @@ test('the New task form creates a fully specified task', async ({ page, request 
   await dialog.getByLabel('Checklist').fill('one\ntwo')
   await dialog.getByRole('button', { name: 'Create task' }).click()
   await expect(page.getByTestId('task-panel').getByLabel('Task title')).toHaveValue('Formal task')
-  const tasks = await (await request.get('/api/tasks')).json()
+  const tasks = await (await page.request.get('/api/tasks')).json()
   expect(tasks[0].subtasks.map((s: { title: string }) => s.title)).toEqual(['one', 'two'])
 })
 
-test('keyboard shortcuts', async ({ page }) => {
-  await page.goto('/')
+test('list keyboard navigation and undo after delete', async ({ page, ws }) => {
+  await createTask(page.request, { title: 'Alpha' })
+  await createTask(page.request, { title: 'Beta' })
+  await page.goto(`${ws}/tasks`)
+  await expect(page.getByTestId('task-row')).toHaveCount(2)
+  await page.keyboard.press('j')
+  await page.keyboard.press('j')
+  await expect(page.getByTestId('task-row').filter({ hasText: 'Beta' })).toHaveAttribute(
+    'data-focused',
+    'true',
+  )
+  await page.keyboard.press('Enter')
+  const panel = page.getByTestId('task-panel')
+  await expect(panel.getByLabel('Task title')).toHaveValue('Beta')
+
+  await panel.getByRole('button', { name: 'Delete task' }).click()
+  await page
+    .getByRole('dialog', { name: 'Delete this task?' })
+    .getByRole('button', { name: 'Delete' })
+    .click()
+  await expect(page.getByTestId('task-row')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Undo' }).click()
+  await expect(page.getByTestId('task-row').filter({ hasText: 'Beta' })).toBeVisible()
+  const titles = (await (await page.request.get('/api/tasks')).json()).map(
+    (t: { title: string }) => t.title,
+  )
+  expect(titles.sort()).toEqual(['Alpha', 'Beta'])
+})
+
+test('board column quick add', async ({ page, ws }) => {
+  await page.goto(`${ws}/board`)
+  await page.getByTestId('add-to-in_progress').click()
+  await page.getByLabel('New task in In progress').fill('Straight to work')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('column-in_progress')).toContainText('Straight to work')
+})
+
+test('keyboard shortcuts', async ({ page, ws }) => {
+  await page.goto(ws)
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
   await page.keyboard.press('n')
   await expect(page.getByLabel('Quick add task')).toBeFocused()
@@ -157,8 +192,11 @@ test('keyboard shortcuts', async ({ page }) => {
   await expect(page.getByRole('dialog')).toBeHidden()
 })
 
-test('quick-added tasks are not auto-opened but can be opened from the toast', async ({ page }) => {
-  await page.goto('/inbox')
+test('quick-added tasks are not auto-opened but can be opened from the toast', async ({
+  page,
+  ws,
+}) => {
+  await page.goto(`${ws}/inbox`)
   await quickAdd(page, 'Toast me')
   await expect(page.getByTestId('task-panel')).toBeHidden()
   await page.getByRole('button', { name: 'Open', exact: true }).click()

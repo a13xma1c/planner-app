@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from planner.models import Priority, Recurrence, Status
+from planner.models import Priority, Recurrence, Role, Status
 
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -26,6 +26,184 @@ def _strip(value: object) -> object:
 
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+
+# ── Users & auth ─────────────────────────────────────────────────────────────
+
+Email = Annotated[str, Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")]
+# Length and strength are enforced by services.passwords (with the user's context), so the
+# schema only bounds the size of what we accept.
+Password = Annotated[str, Field(min_length=1, max_length=256)]
+DisplayName = Annotated[str, Field(min_length=1, max_length=100)]
+
+
+def _normalise_email(value: object) -> object:
+    return value.strip().lower() if isinstance(value, str) else value
+
+
+class UserRead(ORMModel):
+    id: int
+    email: str
+    display_name: str
+
+
+class UserPublic(ORMModel):
+    """What other members of a workspace may see about a user."""
+
+    id: int
+    display_name: str
+
+
+class RegisterRequest(BaseModel):
+    email: Email
+    password: Password
+    display_name: DisplayName
+
+    _email = field_validator("email", mode="before")(_normalise_email)
+    _name = field_validator("display_name", mode="before")(_strip)
+
+
+class LoginRequest(BaseModel):
+    email: Email
+    password: str = Field(min_length=1, max_length=128)
+
+    _email = field_validator("email", mode="before")(_normalise_email)
+
+
+class ProfileUpdate(BaseModel):
+    display_name: DisplayName | None = None
+    _name = field_validator("display_name", mode="before")(_strip)
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: Password
+
+
+class PasswordCheckRequest(BaseModel):
+    password: str = Field(max_length=256)
+    email: str | None = Field(default=None, max_length=254)
+    display_name: str | None = Field(default=None, max_length=100)
+
+
+class PasswordCheckItem(BaseModel):
+    id: str
+    label: str
+    problem: str
+    passed: bool
+    required: bool
+
+
+class PasswordReport(BaseModel):
+    score: int = Field(ge=0, le=4)
+    label: str
+    ok: bool
+    checks: list[PasswordCheckItem]
+    suggestions: list[str]
+    problem: str | None = None
+
+
+class SessionRead(ORMModel):
+    id: int
+    created_at: datetime
+    last_seen_at: datetime
+    user_agent: str
+    is_current: bool = False
+
+
+# ── Workspaces ───────────────────────────────────────────────────────────────
+
+
+class WorkspaceCreate(BaseModel):
+    name: Name
+    _strip_name = field_validator("name", mode="before")(_strip)
+
+
+class WorkspaceUpdate(BaseModel):
+    name: Name | None = None
+    _strip_name = field_validator("name", mode="before")(_strip)
+
+
+class WorkspaceRead(ORMModel):
+    id: int
+    name: str
+    is_personal: bool
+    created_at: datetime
+
+
+class WorkspaceSummary(WorkspaceRead):
+    """A workspace as seen by one of its members."""
+
+    role: Role
+    member_count: int = 1
+    open_task_count: int = 0
+
+
+class MemberRead(BaseModel):
+    user: UserPublic
+    role: Role
+    joined_at: datetime
+
+
+class MemberUpdate(BaseModel):
+    role: Role
+
+
+class InvitationCreate(BaseModel):
+    role: Role = Role.EDITOR
+    email: Email | None = None
+    expires_in_days: int = Field(default=7, ge=1, le=90)
+    max_uses: int | None = Field(default=None, ge=1, le=1000)
+
+    _email = field_validator("email", mode="before")(_normalise_email)
+
+    @field_validator("role")
+    @classmethod
+    def _no_owner_invites(cls, v: Role) -> Role:
+        if v == Role.OWNER:
+            raise ValueError("invite links cannot grant the owner role")
+        return v
+
+
+class InvitationRead(ORMModel):
+    id: int
+    token: str
+    role: Role
+    email: str | None
+    created_at: datetime
+    expires_at: datetime
+    max_uses: int | None
+    use_count: int
+    revoked_at: datetime | None
+    is_valid: bool
+
+
+class InvitationPreview(BaseModel):
+    """What a visitor sees before accepting an invitation."""
+
+    workspace_name: str
+    role: Role
+    invited_by: str | None
+    member_count: int
+    is_valid: bool
+    email: str | None = None
+
+
+# ── Comments ─────────────────────────────────────────────────────────────────
+
+
+class CommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=5000)
+    _strip_body = field_validator("body", mode="before")(_strip)
+
+
+class CommentRead(ORMModel):
+    id: int
+    task_id: int
+    author: UserPublic | None
+    body: str
+    created_at: datetime
+    updated_at: datetime
 
 
 # ── Tags ─────────────────────────────────────────────────────────────────────
@@ -158,6 +336,7 @@ class TaskBase(BaseModel):
     due_date: date | None = None
     recurrence: Recurrence | None = None
     estimate_minutes: int | None = Field(default=None, ge=0, le=100_000)
+    assignee_id: int | None = None
 
     _strip_title = field_validator("title", mode="before")(_strip)
 
@@ -182,6 +361,7 @@ class TaskUpdate(BaseModel):
     due_date: date | None = None
     recurrence: Recurrence | None = None
     estimate_minutes: int | None = Field(default=None, ge=0, le=100_000)
+    assignee_id: int | None = None
     tags: list[TagName] | None = None
     position: int | None = None
 
@@ -204,6 +384,10 @@ class TaskRead(ORMModel):
     completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    assignee_id: int | None
+    assignee: UserPublic | None
+    created_by: UserPublic | None
+    comment_count: int = 0
     tags: list[TagRead]
     subtasks: list[SubtaskRead]
     is_overdue: bool
@@ -231,6 +415,8 @@ class TaskFilter(BaseModel):
     due_from: date | None = None
     due_to: date | None = None
     overdue: bool = False
+    assignee_id: int | None = None
+    unassigned: bool = False
     include_done: bool = True
     sort: TaskSort = TaskSort.SMART
     order: Literal["asc", "desc"] = "asc"
@@ -273,6 +459,7 @@ class BulkAction(StrEnum):
     MOVE_TO_PROJECT = "move_to_project"
     SET_DUE_DATE = "set_due_date"
     ADD_TAG = "add_tag"
+    ASSIGN = "assign"
 
 
 class BulkRequest(BaseModel):
@@ -283,6 +470,7 @@ class BulkRequest(BaseModel):
     project_id: int | None = None
     due_date: date | None = None
     tag: TagName | None = None
+    assignee_id: int | None = None
 
     _normalise_tag = field_validator("tag")(_normalise_optional_tag)
 
@@ -325,6 +513,12 @@ class ProjectProgress(BaseModel):
     done: int
 
 
+class MemberLoad(BaseModel):
+    user: UserPublic | None
+    open: int
+    overdue: int
+
+
 class Overview(BaseModel):
     total: int
     open: int
@@ -339,6 +533,7 @@ class Overview(BaseModel):
     completed_series: list[DayCount]
     created_series: list[DayCount]
     projects: list[ProjectProgress]
+    members: list[MemberLoad] = Field(default_factory=list)
     streak_days: int
 
 

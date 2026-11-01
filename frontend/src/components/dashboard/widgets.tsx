@@ -1,12 +1,14 @@
 import type { LucideIcon } from 'lucide-react'
 import { Link } from 'react-router'
 
-import type { DayCount, ProjectProgress } from '@/api/types'
+import type { DayCount, MemberLoad, ProjectProgress } from '@/api/types'
 import { parseDate } from '@/lib/dates'
 import { cn } from '@/lib/utils'
+import { useWorkspace } from '@/lib/workspaceContext'
 import { format } from 'date-fns'
 
 import { ProgressBar } from '../ui/Misc'
+import { Avatar } from '../workspace/Avatar'
 
 export function StatCard({
   icon: Icon,
@@ -112,12 +114,13 @@ export function ActivityChart({
 }
 
 export function ProjectProgressList({ projects }: { projects: ProjectProgress[] }) {
+  const { path } = useWorkspace()
   if (projects.length === 0) return <p className="text-sm text-slate-500">No tasks yet.</p>
   return (
     <ul className="space-y-3">
       {projects.map((p) => (
         <li key={p.id ?? 'inbox'}>
-          <Link to={p.id === null ? '/inbox' : `/projects/${p.id}`} className="group block">
+          <Link to={path(p.id === null ? '/inbox' : `/projects/${p.id}`)} className="group block">
             <div className="mb-1 flex items-center justify-between text-sm">
               <span className="flex items-center gap-2 text-slate-700 group-hover:underline dark:text-slate-200">
                 <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: p.color }} />
@@ -128,6 +131,48 @@ export function ProjectProgressList({ projects }: { projects: ProjectProgress[] 
               </span>
             </div>
             <ProgressBar value={p.total ? p.done / p.total : 0} color={p.color} />
+          </Link>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** Open / overdue tasks per member of a shared planner. */
+export function TeamLoad({ members }: { members: MemberLoad[] }) {
+  const { path } = useWorkspace()
+  const max = Math.max(1, ...members.map((m) => m.open))
+  return (
+    <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="team-load">
+      {members.map((m) => (
+        <li key={m.user?.id ?? 'none'}>
+          <Link
+            to={path(m.user ? `/tasks?assignee=${m.user.id}` : '/tasks?assignee=none')}
+            className="group flex items-center gap-3 rounded-lg border border-slate-100 p-2.5 hover:border-indigo-300 dark:border-slate-800"
+          >
+            {m.user ? (
+              <Avatar user={m.user} size="md" />
+            ) : (
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-xs text-slate-500 dark:bg-slate-700">
+                ?
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline justify-between text-sm">
+                <span className="truncate font-medium text-slate-800 group-hover:underline dark:text-slate-100">
+                  {m.user?.display_name ?? 'Unassigned'}
+                </span>
+                <span className="text-xs tabular-nums text-slate-500">
+                  {m.open} open
+                  {m.overdue > 0 && <span className="text-rose-600"> · {m.overdue} overdue</span>}
+                </span>
+              </div>
+              <ProgressBar
+                value={m.open / max}
+                className="mt-1"
+                color={m.overdue ? '#f43f5e' : undefined}
+              />
+            </div>
           </Link>
         </li>
       ))}

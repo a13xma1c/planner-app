@@ -10,9 +10,11 @@ import { Input } from '@/components/ui/Input'
 import { EmptyState, ErrorState, PageHeader, PageLoader } from '@/components/ui/Misc'
 import { useToast } from '@/components/ui/toastContext'
 import { PROJECT_COLORS } from '@/lib/meta'
+import { useWorkspace } from '@/lib/workspaceContext'
 
 export function TagsPage() {
   const toast = useToast()
+  const { path } = useWorkspace()
   const { data: tags = [], isLoading, error, refetch } = useTags()
   const [name, setName] = useState('')
   const [deleting, setDeleting] = useState<TagWithCount | null>(null)
@@ -92,7 +94,7 @@ export function TagsPage() {
                 </td>
                 <td className="py-2 text-right tabular-nums">
                   <Link
-                    to={`/tasks?tag=${encodeURIComponent(t.name)}&done=1`}
+                    to={path(`/tasks?tag=${encodeURIComponent(t.name)}&done=1`)}
                     className="text-indigo-600 hover:underline dark:text-indigo-400"
                   >
                     {t.task_count}

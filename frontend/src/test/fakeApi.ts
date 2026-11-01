@@ -5,6 +5,10 @@
  */
 import type {
   BulkRequest,
+  Comment,
+  Invitation,
+  Member,
+  MemberLoad,
   Overview,
   Priority,
   Project,
@@ -17,22 +21,127 @@ import type {
   Task,
   TaskCreate,
   TaskUpdate,
+  User,
+  WorkspaceSummary,
 } from '@/api/types'
 
-import { makeProject, makeSubtask, makeTag, makeTask, nextId } from './fixtures'
+import {
+  makeComment,
+  makeInvitation,
+  makeMember,
+  makeProject,
+  makeSubtask,
+  makeTag,
+  makeTask,
+  makeUser,
+  makeWorkspace,
+  nextId,
+} from './fixtures'
+
+/** Entities carry a workspace id in the fake; the real types don't expose it. */
+type Scoped<T> = T & { workspace_id: number }
 
 export interface Db {
-  tasks: Task[]
-  projects: Project[]
-  tags: Tag[]
+  users: User[]
+  /** null = signed out */
+  currentUser: User | null
+  workspaces: Scoped<WorkspaceSummary>[]
+  members: Scoped<Member>[]
+  invitations: Scoped<Invitation>[]
+  tasks: Scoped<Task>[]
+  projects: Scoped<Project>[]
+  tags: Scoped<Tag>[]
+  comments: Comment[]
 }
 
-export const db: Db = { tasks: [], projects: [], tags: [] }
+export const db: Db = {
+  users: [],
+  currentUser: null,
+  workspaces: [],
+  members: [],
+  invitations: [],
+  tasks: [],
+  projects: [],
+  tags: [],
+  comments: [],
+}
 
+export const ME: User = { id: 1, email: 'me@example.com', display_name: 'Me' }
+export const PERSONAL_WS_ID = 1
+
+/**
+ * Reset to a signed-in user ("Me") who owns personal workspace #1. The active
+ * workspace for scoped handlers is taken from the X-Workspace-Id header (default: 1).
+ */
 export function resetDb(): void {
+  db.users = [{ ...ME }]
+  db.currentUser = db.users[0]!
+  db.workspaces = [
+    {
+      ...makeWorkspace({
+        id: PERSONAL_WS_ID,
+        name: "Me's planner",
+        is_personal: true,
+        role: 'owner',
+      }),
+      workspace_id: PERSONAL_WS_ID,
+    },
+  ]
+  db.members = [{ ...makeMember(ME, { role: 'owner' }), workspace_id: PERSONAL_WS_ID }]
+  db.invitations = []
   db.tasks = []
   db.projects = []
   db.tags = []
+  db.comments = []
+}
+
+/** Create a shared workspace (current user = owner unless `role` given) with extra members. */
+export function seedWorkspace(
+  overrides: Partial<WorkspaceSummary> = {},
+  others: { user: User; role?: Member['role'] }[] = [],
+): WorkspaceSummary {
+  const ws = makeWorkspace({ member_count: 1 + others.length, ...overrides })
+  db.workspaces.push({ ...ws, workspace_id: ws.id })
+  db.members.push({ ...makeMember(db.currentUser ?? ME, { role: ws.role }), workspace_id: ws.id })
+  for (const o of others) {
+    if (!db.users.some((u) => u.id === o.user.id)) db.users.push(o.user)
+    db.members.push({ ...makeMember(o.user, { role: o.role ?? 'editor' }), workspace_id: ws.id })
+  }
+  return ws
+}
+
+export function currentWorkspaceId(request: Request): number {
+  const header = request.headers.get('X-Workspace-Id')
+  const url = new URL(request.url)
+  return Number(header ?? url.searchParams.get('workspace') ?? PERSONAL_WS_ID)
+}
+
+export function isMember(workspaceId: number, userId: number): boolean {
+  return db.members.some((m) => m.workspace_id === workspaceId && m.user.id === userId)
+}
+
+export function roleOf(workspaceId: number, userId: number): Member['role'] | null {
+  return (
+    db.members.find((m) => m.workspace_id === workspaceId && m.user.id === userId)?.role ?? null
+  )
+}
+
+export function workspaceSummaries(userId: number): WorkspaceSummary[] {
+  return db.workspaces
+    .filter((w) => isMember(w.id, userId))
+    .map((w) => {
+      const summary: WorkspaceSummary = Object.assign({}, w, {
+        role: roleOf(w.id, userId)!,
+        member_count: db.members.filter((m) => m.workspace_id === w.id).length,
+        open_task_count: db.tasks.filter((t) => t.workspace_id === w.id && t.status !== 'done')
+          .length,
+      })
+      return summary
+    })
+}
+
+function publicUser(u: User): { id: number; display_name: string } {
+  return { id: u.id, display_name: u.display_name }
 }
 
 export const todayISO = (): string => {
@@ -42,43 +151,66 @@ export const todayISO = (): string => {
 
 const PRIORITY_RANK: Record<Priority, number> = { urgent: 0, high: 1, medium: 2, low: 3 }
 
-function ensureTag(name: string): Tag {
+function ensureTag(name: string, workspaceId: number): Tag {
   const norm = name.replace(/^#/, '').toLowerCase()
-  let tag = db.tags.find((t) => t.name === norm)
+  let tag = db.tags.find((t) => t.name === norm && t.workspace_id === workspaceId)
   if (!tag) {
-    tag = makeTag({ name: norm })
+    tag = { ...makeTag({ name: norm }), workspace_id: workspaceId }
     db.tags.push(tag)
   }
   return tag
 }
 
-function hydrate(task: Task): Task {
+function hydrate(task: Scoped<Task>): Task {
   const project = db.projects.find((p) => p.id === task.project_id) ?? null
   const is_overdue = task.status !== 'done' && !!task.due_date && task.due_date < todayISO()
-  return { ...task, project, project_id: project?.id ?? null, is_overdue }
+  const assigneeUser = db.users.find((u) => u.id === task.assignee_id)
+  const { workspace_id: _wid, ...rest } = task
+  return {
+    ...rest,
+    project,
+    project_id: project?.id ?? null,
+    is_overdue,
+    assignee: assigneeUser ? publicUser(assigneeUser) : null,
+    comment_count: db.comments.filter((c) => c.task_id === task.id).length,
+  }
 }
 
-export function seedProject(overrides: Partial<Project> = {}): Project {
+export function seedProject(
+  overrides: Partial<Project> = {},
+  workspaceId = PERSONAL_WS_ID,
+): Project {
   const p = makeProject(overrides)
-  db.projects.push(p)
+  db.projects.push({ ...p, workspace_id: workspaceId })
   return p
 }
 
-export function seedTask(overrides: Partial<Task> & { tagNames?: string[] } = {}): Task {
+export function seedTask(
+  overrides: Partial<Task> & { tagNames?: string[] } = {},
+  workspaceId = PERSONAL_WS_ID,
+): Task {
   const { tagNames, ...rest } = overrides
   const t = makeTask(rest)
-  if (tagNames) t.tags = tagNames.map(ensureTag)
-  db.tasks.push(t)
-  return hydrate(t)
+  if (tagNames) t.tags = tagNames.map((n) => ensureTag(n, workspaceId))
+  const scoped = { ...t, workspace_id: workspaceId }
+  db.tasks.push(scoped)
+  return hydrate(scoped)
 }
 
-export function getTask(id: number): Task | undefined {
-  const t = db.tasks.find((x) => x.id === id)
+export function seedComment(taskId: number, author: User, body: string): Comment {
+  const c = makeComment(taskId, author, { body })
+  db.comments.push(c)
+  return c
+}
+
+export function getTask(id: number, workspaceId: number): Task | undefined {
+  const t = db.tasks.find((x) => x.id === id && x.workspace_id === workspaceId)
   return t && hydrate(t)
 }
 
-export function createTask(body: TaskCreate): Task {
+export function createTask(body: TaskCreate, workspaceId = PERSONAL_WS_ID): Task {
   const id = nextId()
+  const me = db.currentUser ?? ME
   const task = makeTask({
     id,
     title: body.title.trim(),
@@ -89,35 +221,45 @@ export function createTask(body: TaskCreate): Task {
     due_date: body.due_date ?? null,
     recurrence: body.recurrence ?? null,
     estimate_minutes: body.estimate_minutes ?? null,
+    assignee_id: body.assignee_id ?? null,
+    created_by: publicUser(me),
     position: db.tasks.length,
-    tags: (body.tags ?? []).map(ensureTag),
+    tags: (body.tags ?? []).map((n) => ensureTag(n, workspaceId)),
     subtasks: (body.subtasks ?? []).map((title, i) => makeSubtask(id, { title, position: i })),
   })
   if (task.status === 'done') task.completed_at = new Date().toISOString()
-  db.tasks.push(task)
-  return hydrate(task)
+  const scoped = { ...task, workspace_id: workspaceId }
+  db.tasks.push(scoped)
+  return hydrate(scoped)
 }
 
-export function updateTask(id: number, body: TaskUpdate): Task | undefined {
-  const task = db.tasks.find((t) => t.id === id)
+export function updateTask(
+  id: number,
+  body: TaskUpdate,
+  workspaceId = PERSONAL_WS_ID,
+): Task | undefined {
+  const task = db.tasks.find((t) => t.id === id && t.workspace_id === workspaceId)
   if (!task) return undefined
   const { tags, ...rest } = body
   Object.assign(task, rest)
   if (body.status !== undefined)
     task.completed_at = body.status === 'done' ? new Date().toISOString() : null
-  if (tags) task.tags = tags.map(ensureTag)
+  if (tags) task.tags = tags.map((n) => ensureTag(n, workspaceId))
   task.updated_at = new Date().toISOString()
   return hydrate(task)
 }
 
-export function deleteTask(id: number): boolean {
+export function deleteTask(id: number, workspaceId = PERSONAL_WS_ID): boolean {
   const before = db.tasks.length
-  db.tasks = db.tasks.filter((t) => t.id !== id)
+  db.tasks = db.tasks.filter((t) => !(t.id === id && t.workspace_id === workspaceId))
   return db.tasks.length < before
 }
 
-export function completeTask(id: number): { task: Task; next_task: Task | null } | undefined {
-  const task = db.tasks.find((t) => t.id === id)
+export function completeTask(
+  id: number,
+  workspaceId = PERSONAL_WS_ID,
+): { task: Task; next_task: Task | null } | undefined {
+  const task = db.tasks.find((t) => t.id === id && t.workspace_id === workspaceId)
   if (!task) return undefined
   if (task.status === 'done') return { task: hydrate(task), next_task: null }
   task.status = 'done'
@@ -126,30 +268,39 @@ export function completeTask(id: number): { task: Task; next_task: Task | null }
   if (task.recurrence) {
     const d = new Date(task.due_date ?? todayISO())
     d.setDate(d.getDate() + (task.recurrence === 'weekly' ? 7 : 1))
-    next = createTask({
-      title: task.title,
-      project_id: task.project_id,
-      priority: task.priority,
-      due_date: d.toISOString().slice(0, 10),
-      recurrence: task.recurrence,
-      tags: task.tags.map((t) => t.name),
-    })
+    next = createTask(
+      {
+        title: task.title,
+        project_id: task.project_id,
+        priority: task.priority,
+        due_date: d.toISOString().slice(0, 10),
+        recurrence: task.recurrence,
+        tags: task.tags.map((t) => t.name),
+        assignee_id: task.assignee_id,
+      },
+      workspaceId,
+    )
     task.recurrence = null
   }
   return { task: hydrate(task), next_task: next }
 }
 
-export function reopenTask(id: number): Task | undefined {
-  const task = db.tasks.find((t) => t.id === id)
+export function reopenTask(id: number, workspaceId = PERSONAL_WS_ID): Task | undefined {
+  const task = db.tasks.find((t) => t.id === id && t.workspace_id === workspaceId)
   if (!task) return undefined
   task.status = 'todo'
   task.completed_at = null
   return hydrate(task)
 }
 
-export function listTasks(params: URLSearchParams): Task[] {
-  let rows = db.tasks.map(hydrate)
+export function listTasks(params: URLSearchParams, workspaceId = PERSONAL_WS_ID): Task[] {
+  let rows = db.tasks.filter((t) => t.workspace_id === workspaceId).map(hydrate)
   const today = todayISO()
+  const me = db.currentUser ?? ME
+  if (params.get('assigned_to_me') === 'true') rows = rows.filter((t) => t.assignee_id === me.id)
+  if (params.get('unassigned') === 'true') rows = rows.filter((t) => t.assignee_id === null)
+  if (params.get('assignee_id'))
+    rows = rows.filter((t) => t.assignee_id === Number(params.get('assignee_id')))
   if (params.get('inbox') === 'true') rows = rows.filter((t) => t.project_id === null)
   else if (params.get('project_id'))
     rows = rows.filter((t) => t.project_id === Number(params.get('project_id')))
@@ -193,17 +344,22 @@ export function listTasks(params: URLSearchParams): Task[] {
   return rows
 }
 
-export function upcoming(days: number): Task[] {
+export function upcoming(days: number, workspaceId = PERSONAL_WS_ID): Task[] {
   const today = todayISO()
   const end = new Date()
   end.setDate(end.getDate() + days)
   const endISO = end.toISOString().slice(0, 10)
   return db.tasks
+    .filter((t) => t.workspace_id === workspaceId)
     .map(hydrate)
     .filter((t) => t.status !== 'done' && t.due_date && t.due_date >= today && t.due_date <= endISO)
 }
 
-export function quickAdd(text: string, dryRun: boolean): QuickAddResult {
+export function quickAdd(
+  text: string,
+  dryRun: boolean,
+  workspaceId = PERSONAL_WS_ID,
+): QuickAddResult {
   // Deliberately simple: "#tag", "@Project", "!high", "tomorrow"
   const tags = [...text.matchAll(/#(\w+)/g)].map((m) => m[1]!.toLowerCase())
   const projectName = /@(\w+)/.exec(text)?.[1] ?? null
@@ -236,14 +392,20 @@ export function quickAdd(text: string, dryRun: boolean): QuickAddResult {
     warnings,
   }
   if (dryRun) return { preview, task: null }
-  const task = createTask({ title, project_id: preview.project_id, priority, due_date, tags })
+  const task = createTask(
+    { title, project_id: preview.project_id, priority, due_date, tags },
+    workspaceId,
+  )
   return { preview, task }
 }
 
-export function bulk(req: BulkRequest): { affected: number; tasks: Task[] } {
-  const rows = db.tasks.filter((t) => req.ids.includes(t.id))
+export function bulk(
+  req: BulkRequest,
+  workspaceId = PERSONAL_WS_ID,
+): { affected: number; tasks: Task[] } {
+  const rows = db.tasks.filter((t) => t.workspace_id === workspaceId && req.ids.includes(t.id))
   if (req.action === 'delete') {
-    db.tasks = db.tasks.filter((t) => !req.ids.includes(t.id))
+    db.tasks = db.tasks.filter((t) => !(t.workspace_id === workspaceId && req.ids.includes(t.id)))
     return { affected: rows.length, tasks: [] }
   }
   for (const t of rows) {
@@ -269,18 +431,21 @@ export function bulk(req: BulkRequest): { affected: number; tasks: Task[] } {
         t.due_date = req.due_date ?? null
         break
       case 'add_tag': {
-        const tag = ensureTag(req.tag!)
+        const tag = ensureTag(req.tag!, workspaceId)
         if (!t.tags.some((x) => x.id === tag.id)) t.tags.push(tag)
         break
       }
+      case 'assign':
+        t.assignee_id = req.assignee_id ?? null
+        break
     }
   }
   return { affected: rows.length, tasks: rows.map(hydrate) }
 }
 
-export function reorder(status: Status, ids: number[]): Task[] {
+export function reorder(status: Status, ids: number[], workspaceId = PERSONAL_WS_ID): Task[] {
   return ids.map((id, i) => {
-    const t = db.tasks.find((x) => x.id === id)!
+    const t = db.tasks.find((x) => x.id === id && x.workspace_id === workspaceId)!
     t.status = status
     t.position = i
     return hydrate(t)
@@ -315,8 +480,12 @@ export function deleteSubtask(id: number): boolean {
   return false
 }
 
-export function projectsWithStats(includeArchived: boolean): ProjectWithStats[] {
+export function projectsWithStats(
+  includeArchived: boolean,
+  workspaceId = PERSONAL_WS_ID,
+): ProjectWithStats[] {
   return db.projects
+    .filter((p) => p.workspace_id === workspaceId)
     .filter((p) => includeArchived || !p.is_archived)
     .map((p) => {
       const tasks = db.tasks.filter((t) => t.project_id === p.id).map(hydrate)
@@ -330,18 +499,37 @@ export function projectsWithStats(includeArchived: boolean): ProjectWithStats[] 
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
-export function tagsWithCounts(): TagWithCount[] {
+export function tagsWithCounts(workspaceId = PERSONAL_WS_ID): TagWithCount[] {
   return db.tags
-    .map((tag) => ({
-      ...tag,
-      task_count: db.tasks.filter((t) => t.tags.some((x) => x.id === tag.id)).length,
-    }))
+    .filter((t) => t.workspace_id === workspaceId)
+    .map((tag) => {
+      const row: TagWithCount = Object.assign({}, tag, {
+        task_count: db.tasks.filter((t) => t.tags.some((x) => x.id === tag.id)).length,
+      })
+      return row
+    })
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
-export function overview(): Overview {
+export function overview(workspaceId = PERSONAL_WS_ID): Overview {
   const today = todayISO()
-  const tasks = db.tasks.map(hydrate)
+  const tasks = db.tasks.filter((t) => t.workspace_id === workspaceId).map(hydrate)
+  const memberRows = db.members.filter((m) => m.workspace_id === workspaceId)
+  const members: MemberLoad[] =
+    memberRows.length < 2
+      ? []
+      : [
+          ...memberRows.map((m) => ({
+            user: m.user,
+            open: tasks.filter((t) => t.status !== 'done' && t.assignee_id === m.user.id).length,
+            overdue: tasks.filter((t) => t.is_overdue && t.assignee_id === m.user.id).length,
+          })),
+          {
+            user: null,
+            open: tasks.filter((t) => t.status !== 'done' && t.assignee_id === null).length,
+            overdue: tasks.filter((t) => t.is_overdue && t.assignee_id === null).length,
+          },
+        ]
   const done = tasks.filter((t) => t.status === 'done')
   const open = tasks.filter((t) => t.status !== 'done')
   const days = Array.from({ length: 14 }, (_, i) => {
@@ -362,7 +550,7 @@ export function overview(): Overview {
         ]
       : []),
     ...db.projects
-      .filter((p) => !p.is_archived)
+      .filter((p) => p.workspace_id === workspaceId && !p.is_archived)
       .map((p) => ({
         id: p.id,
         name: p.name,
@@ -400,6 +588,51 @@ export function overview(): Overview {
       count: tasks.filter((t) => t.created_at.slice(0, 10) === day).length,
     })),
     projects,
+    members,
     streak_days: done.some((t) => t.completed_at?.slice(0, 10) === today) ? 1 : 0,
   }
+}
+
+// ── auth / workspaces / invitations / comments ───────────────────────────
+
+export function register(body: { email: string; display_name: string }): User {
+  const user = makeUser({ email: body.email.toLowerCase(), display_name: body.display_name })
+  db.users.push(user)
+  db.currentUser = user
+  const ws = makeWorkspace({ name: `${user.display_name}'s planner`, is_personal: true })
+  db.workspaces.push({ ...ws, workspace_id: ws.id })
+  db.members.push({ ...makeMember(user, { role: 'owner' }), workspace_id: ws.id })
+  return user
+}
+
+export function membersOf(workspaceId: number): Member[] {
+  return db.members
+    .filter((m) => m.workspace_id === workspaceId)
+    .map(({ workspace_id: _w, ...m }) => m)
+}
+
+export function createInvitation(workspaceId: number, body: Partial<Invitation>): Invitation {
+  const inv = { ...makeInvitation(body), workspace_id: workspaceId }
+  db.invitations.push(inv)
+  return inv
+}
+
+export function acceptInvitation(
+  token: string,
+): WorkspaceSummary | { error: string; status: number } {
+  const inv = db.invitations.find((i) => i.token === token)
+  const me = db.currentUser
+  if (!inv) return { error: 'This invitation link is not valid', status: 404 }
+  if (!me) return { error: 'Not signed in', status: 401 }
+  if (!inv.is_valid)
+    return { error: 'This invitation link has expired or been revoked', status: 409 }
+  if (!isMember(inv.workspace_id, me.id)) {
+    db.members.push({ ...makeMember(me, { role: inv.role }), workspace_id: inv.workspace_id })
+    inv.use_count += 1
+  }
+  return workspaceSummaries(me.id).find((w) => w.id === inv.workspace_id)!
+}
+
+export function commentsFor(taskId: number): Comment[] {
+  return db.comments.filter((c) => c.task_id === taskId)
 }

@@ -3,6 +3,9 @@ import type { ReactNode } from 'react'
 
 import type { Task } from '@/api/types'
 
+import { useListNavigation } from '@/lib/useListNavigation'
+import { useWorkspace } from '@/lib/workspaceContext'
+
 import { EmptyState } from '../ui/Misc'
 import { TaskRow } from './TaskRow'
 
@@ -18,6 +21,8 @@ interface TaskListProps {
   emptyAction?: ReactNode
   /** Optional grouping: returns a key + heading for each task. */
   groupBy?: (task: Task) => { key: string; heading: string }
+  /** j/k/Enter/x/c keyboard navigation (on for page-level lists, off for dashboard cards). */
+  keyboard?: boolean
 }
 
 export function TaskList({
@@ -31,7 +36,16 @@ export function TaskList({
   emptyDescription = 'Add one with the quick-add bar above.',
   emptyAction,
   groupBy,
+  keyboard = false,
 }: TaskListProps) {
+  const { canEdit } = useWorkspace()
+  const { cursor, setCursor } = useListNavigation({
+    tasks,
+    onOpen,
+    onToggleDone: canEdit ? onToggleDone : undefined,
+    onToggleSelect: canEdit ? onToggleSelect : undefined,
+    enabled: keyboard,
+  })
   if (tasks.length === 0) {
     return (
       <EmptyState
@@ -55,6 +69,9 @@ export function TaskList({
             selected={selectedIds?.has(t.id)}
             onToggleSelect={onToggleSelect}
             showProject={showProject}
+            canEdit={canEdit}
+            focused={cursor === t.id}
+            onHover={keyboard ? setCursor : undefined}
           />
         ))}
       </ul>
@@ -86,6 +103,9 @@ export function TaskList({
                 selected={selectedIds?.has(t.id)}
                 onToggleSelect={onToggleSelect}
                 showProject={showProject}
+                canEdit={canEdit}
+                focused={cursor === t.id}
+                onHover={keyboard ? setCursor : undefined}
               />
             ))}
           </ul>

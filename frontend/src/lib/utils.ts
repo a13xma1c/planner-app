@@ -1,8 +1,9 @@
 import { clsx, type ClassValue } from 'clsx'
+import { twMerge } from 'tailwind-merge'
 
-/** Merge class names (clsx); kept tiny on purpose. */
+/** Merge class names, resolving Tailwind conflicts (later classes win: `cn('w-full', 'w-auto')` → `w-auto`). */
 export function cn(...inputs: ClassValue[]): string {
-  return clsx(inputs)
+  return twMerge(clsx(inputs))
 }
 
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {

@@ -19,7 +19,7 @@ describe('DashboardPage', () => {
     seedTask({ title: 'Today one', due_date: todayISO(), project_id: p.id })
     seedTask({ title: 'Soon', due_date: shiftDays(2) })
     seedTask({ title: 'Finished', status: 'done', completed_at: new Date().toISOString() })
-    app('/')
+    app('/w/1')
     expect(await screen.findByText(/^Good (morning|afternoon|evening)$/)).toBeInTheDocument()
     await waitFor(() => expect(screen.getByTestId('stat-open')).toHaveTextContent('3'))
     expect(screen.getByTestId('stat-overdue')).toHaveTextContent('1')
@@ -34,7 +34,7 @@ describe('DashboardPage', () => {
     const projects = screen.getByRole('region', { name: 'Projects' })
     expect(within(projects).getByRole('link', { name: /Work/ })).toHaveAttribute(
       'href',
-      `/projects/${p.id}`,
+      `/w/1/projects/${p.id}`,
     )
   })
 })
@@ -43,7 +43,7 @@ describe('TasksPage', () => {
   it('lists tasks, hides done by default and reacts to URL filters', async () => {
     seedTask({ title: 'Open thing', priority: 'high' })
     seedTask({ title: 'Done thing', status: 'done' })
-    const { user } = app('/tasks')
+    const { user } = app('/w/1/tasks')
     expect(await screen.findByText('Open thing')).toBeInTheDocument()
     expect(screen.queryByText('Done thing')).not.toBeInTheDocument()
     await user.click(screen.getByLabelText('Show completed'))
@@ -58,7 +58,7 @@ describe('TasksPage', () => {
     seedTask({ title: 'Late', due_date: shiftDays(-3) })
     seedTask({ title: 'Now', due_date: todayISO() })
     seedTask({ title: 'Future', due_date: shiftDays(3) })
-    app('/today')
+    app('/w/1/today')
     expect(await screen.findByText('Late')).toBeInTheDocument()
     expect(
       within(screen.getByRole('region', { name: 'Overdue' })).getByText('Late'),
@@ -72,7 +72,7 @@ describe('TasksPage', () => {
   it('groups Upcoming by day', async () => {
     seedTask({ title: 'Tmrw', due_date: shiftDays(1) })
     seedTask({ title: 'Far', due_date: shiftDays(40) })
-    app('/upcoming')
+    app('/w/1/upcoming')
     expect(await screen.findByText('Tmrw')).toBeInTheDocument()
     expect(screen.getByRole('region', { name: /^Tomorrow/ })).toBeInTheDocument()
     expect(screen.queryByText('Far')).not.toBeInTheDocument()
@@ -82,7 +82,7 @@ describe('TasksPage', () => {
     const p = seedProject({ name: 'P' })
     seedTask({ title: 'In project', project_id: p.id })
     seedTask({ title: 'Loose' })
-    app('/inbox')
+    app('/w/1/inbox')
     expect(await screen.findByText('Loose')).toBeInTheDocument()
     expect(screen.queryByText('In project')).not.toBeInTheDocument()
   })
@@ -90,7 +90,7 @@ describe('TasksPage', () => {
   it('shows a project with header actions and deletes it', async () => {
     const p = seedProject({ name: 'Doomed', description: 'desc' })
     seedTask({ title: 'Survivor', project_id: p.id })
-    const { user } = app(`/projects/${p.id}`)
+    const { user } = app(`/w/1/projects/${p.id}`)
     expect(await screen.findByText('Survivor')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /Doomed/ })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Archive/ }))
@@ -107,7 +107,7 @@ describe('TasksPage', () => {
   it('supports bulk selection from the list', async () => {
     seedTask({ title: 'A' })
     seedTask({ title: 'B' })
-    const { user } = app('/tasks')
+    const { user } = app('/w/1/tasks')
     await user.click(await screen.findByRole('checkbox', { name: 'Select A' }))
     expect(screen.getByTestId('bulk-bar')).toHaveTextContent('1 selected')
     await user.click(screen.getByRole('button', { name: 'Select all 2' }))
@@ -119,7 +119,7 @@ describe('TasksPage', () => {
   it('filters by a specific due date from the calendar', async () => {
     seedTask({ title: 'On the day', due_date: '2030-05-05' })
     seedTask({ title: 'Other day', due_date: '2030-05-06' })
-    const { user } = app('/tasks?due=2030-05-05')
+    const { user } = app('/w/1/tasks?due=2030-05-05')
     expect(await screen.findByText('On the day')).toBeInTheDocument()
     expect(screen.queryByText('Other day')).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /Due Sunday, 5 May 2030/ })).toBeInTheDocument()
@@ -128,7 +128,7 @@ describe('TasksPage', () => {
   })
 
   it('redirects invalid project ids', async () => {
-    app('/projects/abc')
+    app('/w/1/projects/abc')
     expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument()
   })
 })
@@ -138,7 +138,7 @@ describe('BoardPage', () => {
     const p = seedProject({ name: 'Only' })
     seedTask({ title: 'Mine', project_id: p.id, status: 'in_progress' })
     seedTask({ title: 'Other' })
-    const { user } = app('/board')
+    const { user } = app('/w/1/board')
     expect(await screen.findByText('Mine')).toBeInTheDocument()
     expect(screen.getByText('Other')).toBeInTheDocument()
     await user.selectOptions(screen.getByLabelText('Filter board by project'), String(p.id))
@@ -150,7 +150,7 @@ describe('BoardPage', () => {
 describe('CalendarPage', () => {
   it('shows tasks for the month from the URL', async () => {
     seedTask({ title: 'Xmas', due_date: '2030-12-25' })
-    app('/calendar?month=2030-12')
+    app('/w/1/calendar?month=2030-12')
     expect(await screen.findByText('Xmas')).toBeInTheDocument()
     expect(screen.getByTestId('calendar-month')).toHaveTextContent('December 2030')
   })
@@ -158,7 +158,7 @@ describe('CalendarPage', () => {
 
 describe('ProjectsPage', () => {
   it('creates and edits projects', async () => {
-    const { user } = app('/projects')
+    const { user } = app('/w/1/projects')
     expect(await screen.findByText('No projects yet')).toBeInTheDocument()
     await user.click(screen.getByTestId('new-project-button'))
     await user.type(screen.getByLabelText('Name'), 'Garden')
@@ -181,7 +181,7 @@ describe('ProjectsPage', () => {
 
   it('surfaces duplicate-name errors inline', async () => {
     seedProject({ name: 'Taken' })
-    const { user } = app('/projects')
+    const { user } = app('/w/1/projects')
     await user.click(await screen.findByTestId('new-project-button'))
     await user.type(screen.getByLabelText('Name'), 'taken')
     await user.click(screen.getByRole('button', { name: 'Create project' }))
@@ -191,23 +191,24 @@ describe('ProjectsPage', () => {
   it('toggles archived visibility', async () => {
     seedProject({ name: 'Live' })
     seedProject({ name: 'Old', is_archived: true })
-    const { user } = app('/projects')
-    expect(await screen.findByText('Live')).toBeInTheDocument()
-    expect(screen.queryByText('Old')).not.toBeInTheDocument()
+    const { user } = app('/w/1/projects')
+    const grid = await screen.findByTestId('project-grid')
+    expect(await within(grid).findByText('Live')).toBeInTheDocument()
+    expect(within(grid).queryByText('Old')).not.toBeInTheDocument()
     await user.click(screen.getByLabelText('Show archived'))
-    expect(screen.getByText('Old')).toBeInTheDocument()
+    expect(within(grid).getByText('Old')).toBeInTheDocument()
   })
 })
 
 describe('TagsPage', () => {
   it('creates, renames and deletes tags', async () => {
     seedTask({ title: 't', tagNames: ['work'] })
-    const { user } = app('/tags')
+    const { user } = app('/w/1/tags')
     const table = await screen.findByTestId('tags-table')
     expect(within(table).getByDisplayValue('work')).toBeInTheDocument()
     expect(within(table).getByRole('link', { name: '1' })).toHaveAttribute(
       'href',
-      '/tasks?tag=work&done=1',
+      '/w/1/tasks?tag=work&done=1',
     )
 
     await user.type(screen.getByLabelText('New tag name'), 'Fresh{Enter}')
@@ -226,7 +227,7 @@ describe('TagsPage', () => {
 
 describe('SettingsPage', () => {
   it('switches theme and shows version', async () => {
-    const { user } = app('/settings')
+    const { user } = app('/w/1/settings')
     await waitFor(() => expect(screen.getByTestId('app-version')).toHaveTextContent('test'))
     await user.click(screen.getByRole('radio', { name: 'Dark' }))
     expect(document.documentElement).toHaveClass('dark')
@@ -234,7 +235,7 @@ describe('SettingsPage', () => {
   })
 
   it('imports a legacy file and reports the result', async () => {
-    const { user } = app('/settings')
+    const { user } = app('/w/1/settings')
     const input = (await screen.findByTestId('import-legacy-input')) as HTMLInputElement
     const file = new File(
       [JSON.stringify({ tasks: [{ title: 'old' }], projects: [] })],
@@ -247,14 +248,14 @@ describe('SettingsPage', () => {
   })
 
   it('rejects non-JSON uploads', async () => {
-    const { user } = app('/settings')
+    const { user } = app('/w/1/settings')
     const input = (await screen.findByTestId('import-legacy-input')) as HTMLInputElement
     await user.upload(input, new File(['not json'], 'x.json', { type: 'application/json' }))
     expect(await screen.findByRole('status')).toHaveTextContent('Invalid file')
   })
 
   it('asks for confirmation before a replace import', async () => {
-    const { user } = app('/settings')
+    const { user } = app('/w/1/settings')
     await user.click(await screen.findByRole('button', { name: 'Import (replace)' }))
     const input = screen.getByTestId('import-bundle-input') as HTMLInputElement
     await user.upload(

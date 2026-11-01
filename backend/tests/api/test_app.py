@@ -26,6 +26,20 @@ async def test_404_for_unknown_api_route_without_frontend(client: AsyncClient):
     assert (await client.get("/nothing-here")).status_code == 404
 
 
+async def test_api_requires_authentication(anon: AsyncClient):
+    for path in [
+        "/api/tasks",
+        "/api/projects",
+        "/api/tags",
+        "/api/stats/overview",
+        "/api/workspaces",
+    ]:
+        r = await anon.get(path)
+        assert r.status_code == 401, path
+        assert r.json()["detail"] == "Not signed in"
+    assert (await anon.get("/api/health")).status_code == 200
+
+
 async def test_spa_is_served_when_built(tmp_path: Path, db: Database):
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
@@ -59,6 +73,15 @@ async def test_app_creates_its_own_database(tmp_path: Path):
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c,
     ):
+        r = await c.post(
+            "/api/auth/register",
+            json={
+                "email": "x@example.com",
+                "password": "orbit-cactus-lantern-7",
+                "display_name": "X",
+            },
+        )
+        assert r.status_code == 201
         r = await c.post("/api/tasks", json={"title": "persist"})
         assert r.status_code == 201
     assert (tmp_path / "nested" / "p.db").exists()

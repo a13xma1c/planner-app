@@ -12,6 +12,7 @@ from sqlalchemy.sql.elements import Case
 
 from planner.models import (
     PRIORITY_RANK,
+    Membership,
     Project,
     Status,
     Subtask,
@@ -73,6 +74,10 @@ def _apply_filters(stmt: Select[Any], f: TaskFilter, today: date) -> Select[Any]
         stmt = stmt.where(Task.due_date <= f.due_to)
     if f.overdue:
         stmt = stmt.where(Task.status != Status.DONE, Task.due_date < today)
+    if f.unassigned:
+        stmt = stmt.where(Task.assignee_id.is_(None))
+    elif f.assignee_id is not None:
+        stmt = stmt.where(Task.assignee_id == f.assignee_id)
     return stmt
 
 
@@ -102,67 +107,105 @@ def _apply_sort(stmt: Select[Any], f: TaskFilter, today: date) -> Select[Any]:
 
 
 async def list_tasks(
-    session: AsyncSession, f: TaskFilter | None = None, *, today: date | None = None
+    session: AsyncSession,
+    workspace_id: int,
+    f: TaskFilter | None = None,
+    *,
+    today: date | None = None,
 ) -> Sequence[Task]:
     f = f or TaskFilter()
     today = today or date.today()
-    stmt: Select[Any] = _apply_sort(_apply_filters(select(Task), f, today), f, today)
+    base = select(Task).where(Task.workspace_id == workspace_id)
+    stmt: Select[Any] = _apply_sort(_apply_filters(base, f, today), f, today)
     if f.limit:
         stmt = stmt.limit(f.limit)
     return (await session.scalars(stmt)).all()
 
 
-async def get_task(session: AsyncSession, task_id: int) -> Task:
+async def get_task(session: AsyncSession, workspace_id: int, task_id: int) -> Task:
     task = await session.get(Task, task_id)
-    if task is None:
+    if task is None or task.workspace_id != workspace_id:
         raise NotFoundError(f"Task {task_id} not found")
     return task
 
 
-async def _validate_project(session: AsyncSession, project_id: int | None) -> None:
+async def _validate_project(
+    session: AsyncSession, workspace_id: int, project_id: int | None
+) -> None:
     if project_id is not None:
-        await get_project(session, project_id)  # raises NotFoundError
+        await get_project(session, workspace_id, project_id)  # raises NotFoundError
 
 
-async def _next_position(session: AsyncSession, status: Status) -> int:
-    current = await session.scalar(select(func.max(Task.position)).where(Task.status == status))
+async def _validate_assignee(
+    session: AsyncSession, workspace_id: int, assignee_id: int | None
+) -> None:
+    if assignee_id is None:
+        return
+    member = await session.scalar(
+        select(Membership).where(
+            Membership.workspace_id == workspace_id, Membership.user_id == assignee_id
+        )
+    )
+    if member is None:
+        raise ValidationError("Assignee must be a member of this planner")
+
+
+async def _next_position(session: AsyncSession, workspace_id: int, status: Status) -> int:
+    current = await session.scalar(
+        select(func.max(Task.position)).where(
+            Task.workspace_id == workspace_id, Task.status == status
+        )
+    )
     return (current or 0) + 1
 
 
 # ── create / update / delete ─────────────────────────────────────────────────
 
 
-async def create_task(session: AsyncSession, data: TaskCreate) -> Task:
-    await _validate_project(session, data.project_id)
+async def create_task(
+    session: AsyncSession,
+    workspace_id: int,
+    data: TaskCreate,
+    *,
+    created_by_id: int | None = None,
+) -> Task:
+    await _validate_project(session, workspace_id, data.project_id)
+    await _validate_assignee(session, workspace_id, data.assignee_id)
     task = Task(
         **data.model_dump(exclude={"tags", "subtasks"}),
-        position=await _next_position(session, data.status),
+        workspace_id=workspace_id,
+        created_by_id=created_by_id,
+        position=await _next_position(session, workspace_id, data.status),
     )
     if data.status == Status.DONE:
         task.completed_at = utcnow()
-    task.tags = await get_or_create_tags(session, data.tags)
+    task.tags = await get_or_create_tags(session, workspace_id, data.tags)
     task.subtasks = [Subtask(title=t.strip(), position=i) for i, t in enumerate(data.subtasks)]
     session.add(task)
     await session.commit()
     return await _reload(session, task.id)
 
 
-async def update_task(session: AsyncSession, task_id: int, data: TaskUpdate) -> Task:
-    task = await get_task(session, task_id)
+async def update_task(
+    session: AsyncSession, workspace_id: int, task_id: int, data: TaskUpdate
+) -> Task:
+    task = await get_task(session, workspace_id, task_id)
     changes = data.model_dump(exclude_unset=True)
     tags = changes.pop("tags", None)
     if "project_id" in changes:
-        await _validate_project(session, changes["project_id"])
+        await _validate_project(session, workspace_id, changes["project_id"])
+    if "assignee_id" in changes:
+        await _validate_assignee(session, workspace_id, changes["assignee_id"])
     if "status" in changes and changes["status"] != task.status:
         _apply_status_change(task, changes["status"])
         if "position" not in changes:
-            changes["position"] = await _next_position(session, changes["status"])
+            changes["position"] = await _next_position(session, workspace_id, changes["status"])
     for key, value in changes.items():
         if key == "title" and value is None:
             continue
         setattr(task, key, value)
     if tags is not None:
-        task.tags = await get_or_create_tags(session, tags)
+        task.tags = await get_or_create_tags(session, workspace_id, tags)
     await session.commit()
     return await _reload(session, task.id)
 
@@ -172,8 +215,8 @@ def _apply_status_change(task: Task, status: Status) -> None:
     task.completed_at = utcnow() if status == Status.DONE else None
 
 
-async def delete_task(session: AsyncSession, task_id: int) -> None:
-    task = await get_task(session, task_id)
+async def delete_task(session: AsyncSession, workspace_id: int, task_id: int) -> None:
+    task = await get_task(session, workspace_id, task_id)
     await session.delete(task)
     await session.commit()
 
@@ -190,30 +233,33 @@ async def _reload(session: AsyncSession, task_id: int) -> Task:
 
 
 async def complete_task(
-    session: AsyncSession, task_id: int, *, today: date | None = None
+    session: AsyncSession, workspace_id: int, task_id: int, *, today: date | None = None
 ) -> tuple[Task, Task | None]:
     """Mark a task done. For recurring tasks, spawn the next occurrence."""
     today = today or date.today()
-    task = await get_task(session, task_id)
+    task = await get_task(session, workspace_id, task_id)
     if task.status == Status.DONE:
         return task, None
 
     _apply_status_change(task, Status.DONE)
-    task.position = await _next_position(session, Status.DONE)
+    task.position = await _next_position(session, workspace_id, Status.DONE)
 
     follow_up: Task | None = None
     if task.recurrence is not None:
         base = task.due_date or today
         follow_up = Task(
+            workspace_id=task.workspace_id,
             title=task.title,
             notes=task.notes,
             project_id=task.project_id,
+            assignee_id=task.assignee_id,
+            created_by_id=task.created_by_id,
             priority=task.priority,
             status=Status.TODO,
             due_date=next_due_date(base, task.recurrence, after=today),
             recurrence=task.recurrence,
             estimate_minutes=task.estimate_minutes,
-            position=await _next_position(session, Status.TODO),
+            position=await _next_position(session, workspace_id, Status.TODO),
         )
         follow_up.tags = list(task.tags)
         follow_up.subtasks = [Subtask(title=s.title, position=s.position) for s in task.subtasks]
@@ -227,11 +273,11 @@ async def complete_task(
     return done, nxt
 
 
-async def reopen_task(session: AsyncSession, task_id: int) -> Task:
-    task = await get_task(session, task_id)
+async def reopen_task(session: AsyncSession, workspace_id: int, task_id: int) -> Task:
+    task = await get_task(session, workspace_id, task_id)
     if task.status == Status.DONE:
         _apply_status_change(task, Status.TODO)
-        task.position = await _next_position(session, Status.TODO)
+        task.position = await _next_position(session, workspace_id, Status.TODO)
         await session.commit()
     return await _reload(session, task.id)
 
@@ -240,12 +286,16 @@ async def reopen_task(session: AsyncSession, task_id: int) -> Task:
 
 
 async def reorder_tasks(
-    session: AsyncSession, status: Status, ordered_ids: list[int]
+    session: AsyncSession, workspace_id: int, status: Status, ordered_ids: list[int]
 ) -> list[Task]:
     """Move the given tasks into ``status`` and set their positions to the given order."""
     if len(set(ordered_ids)) != len(ordered_ids):
         raise ValidationError("ordered_ids contains duplicates")
-    rows = (await session.scalars(select(Task).where(Task.id.in_(ordered_ids)))).all()
+    rows = (
+        await session.scalars(
+            select(Task).where(Task.workspace_id == workspace_id, Task.id.in_(ordered_ids))
+        )
+    ).all()
     by_id = {t.id: t for t in rows}
     missing = [i for i in ordered_ids if i not in by_id]
     if missing:
@@ -262,8 +312,14 @@ async def reorder_tasks(
 # ── bulk operations ──────────────────────────────────────────────────────────
 
 
-async def bulk_update(session: AsyncSession, req: BulkRequest) -> tuple[int, list[Task]]:
-    rows = (await session.scalars(select(Task).where(Task.id.in_(req.ids)))).all()
+async def bulk_update(
+    session: AsyncSession, workspace_id: int, req: BulkRequest
+) -> tuple[int, list[Task]]:
+    rows = (
+        await session.scalars(
+            select(Task).where(Task.workspace_id == workspace_id, Task.id.in_(req.ids))
+        )
+    ).all()
     if not rows:
         return 0, []
 
@@ -274,8 +330,10 @@ async def bulk_update(session: AsyncSession, req: BulkRequest) -> tuple[int, lis
         return len(rows), []
 
     if req.action == BulkAction.MOVE_TO_PROJECT:
-        await _validate_project(session, req.project_id)
-    tag = (await get_or_create_tags(session, [req.tag]))[0] if req.tag else None
+        await _validate_project(session, workspace_id, req.project_id)
+    if req.action == BulkAction.ASSIGN:
+        await _validate_assignee(session, workspace_id, req.assignee_id)
+    tag = (await get_or_create_tags(session, workspace_id, [req.tag]))[0] if req.tag else None
 
     for t in rows:
         match req.action:
@@ -300,6 +358,8 @@ async def bulk_update(session: AsyncSession, req: BulkRequest) -> tuple[int, lis
                 assert tag is not None
                 if tag not in t.tags:
                     t.tags.append(tag)
+            case BulkAction.ASSIGN:
+                t.assignee_id = req.assignee_id
     await session.commit()
     ids = [t.id for t in rows]
     return len(rows), [await _reload(session, i) for i in ids]
@@ -308,8 +368,10 @@ async def bulk_update(session: AsyncSession, req: BulkRequest) -> tuple[int, lis
 # ── subtasks ─────────────────────────────────────────────────────────────────
 
 
-async def add_subtask(session: AsyncSession, task_id: int, data: SubtaskCreate) -> Subtask:
-    task = await get_task(session, task_id)
+async def add_subtask(
+    session: AsyncSession, workspace_id: int, task_id: int, data: SubtaskCreate
+) -> Subtask:
+    task = await get_task(session, workspace_id, task_id)
     position = max((s.position for s in task.subtasks), default=-1) + 1
     sub = Subtask(task_id=task.id, title=data.title, position=position)
     session.add(sub)
@@ -319,24 +381,30 @@ async def add_subtask(session: AsyncSession, task_id: int, data: SubtaskCreate) 
     return sub
 
 
-async def update_subtask(session: AsyncSession, subtask_id: int, data: SubtaskUpdate) -> Subtask:
+async def _get_subtask(session: AsyncSession, workspace_id: int, subtask_id: int) -> Subtask:
     sub = await session.get(Subtask, subtask_id)
     if sub is None:
         raise NotFoundError(f"Subtask {subtask_id} not found")
+    await get_task(session, workspace_id, sub.task_id)  # enforces workspace scope
+    return sub
+
+
+async def update_subtask(
+    session: AsyncSession, workspace_id: int, subtask_id: int, data: SubtaskUpdate
+) -> Subtask:
+    sub = await _get_subtask(session, workspace_id, subtask_id)
     for key, value in data.model_dump(exclude_unset=True, exclude_none=True).items():
         setattr(sub, key, value)
-    parent = await get_task(session, sub.task_id)
+    parent = await get_task(session, workspace_id, sub.task_id)
     parent.updated_at = utcnow()
     await session.commit()
     await session.refresh(sub)
     return sub
 
 
-async def delete_subtask(session: AsyncSession, subtask_id: int) -> None:
-    sub = await session.get(Subtask, subtask_id)
-    if sub is None:
-        raise NotFoundError(f"Subtask {subtask_id} not found")
-    parent = await get_task(session, sub.task_id)
+async def delete_subtask(session: AsyncSession, workspace_id: int, subtask_id: int) -> None:
+    sub = await _get_subtask(session, workspace_id, subtask_id)
+    parent = await get_task(session, workspace_id, sub.task_id)
     parent.updated_at = utcnow()
     await session.delete(sub)
     await session.commit()
@@ -346,7 +414,13 @@ async def delete_subtask(session: AsyncSession, subtask_id: int) -> None:
 
 
 async def quick_add(
-    session: AsyncSession, text: str, *, dry_run: bool = False, today: date | None = None
+    session: AsyncSession,
+    workspace_id: int,
+    text: str,
+    *,
+    dry_run: bool = False,
+    today: date | None = None,
+    created_by_id: int | None = None,
 ) -> tuple[QuickAddPreview, Task | None]:
     parsed = qa.parse(text, today=today)
     preview = QuickAddPreview(
@@ -360,7 +434,9 @@ async def quick_add(
         warnings=list(parsed.warnings),
     )
     if parsed.project_name:
-        project: Project | None = await find_project_by_name(session, parsed.project_name)
+        project: Project | None = await find_project_by_name(
+            session, workspace_id, parsed.project_name
+        )
         if project is None:
             preview.warnings.append(
                 f"Project '{parsed.project_name}' not found; task will go to the Inbox."
@@ -373,6 +449,7 @@ async def quick_add(
         return preview, None
     task = await create_task(
         session,
+        workspace_id,
         TaskCreate(
             title=preview.title,
             project_id=preview.project_id,
@@ -382,6 +459,7 @@ async def quick_add(
             estimate_minutes=preview.estimate_minutes,
             tags=preview.tags,
         ),
+        created_by_id=created_by_id,
     )
     return preview, task
 
@@ -390,8 +468,8 @@ async def quick_add(
 
 
 async def upcoming(
-    session: AsyncSession, days: int = 7, *, today: date | None = None
+    session: AsyncSession, workspace_id: int, days: int = 7, *, today: date | None = None
 ) -> Sequence[Task]:
     today = today or date.today()
     f = TaskFilter(due_from=today, due_to=today + timedelta(days=days), include_done=False)
-    return await list_tasks(session, f, today=today)
+    return await list_tasks(session, workspace_id, f, today=today)

@@ -1,16 +1,23 @@
-import { AlertTriangle, CheckCircle2, Flame, ListTodo, Sun, TrendingUp } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Flame, ListTodo, Sun, TrendingUp, Users } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { useOverview, useTasks, useUpcoming } from '@/api/queries'
 import { PRIORITIES } from '@/api/types'
-import { ActivityChart, Card, ProjectProgressList, StatCard } from '@/components/dashboard/widgets'
+import {
+  ActivityChart,
+  Card,
+  ProjectProgressList,
+  StatCard,
+  TeamLoad,
+} from '@/components/dashboard/widgets'
 import { TaskList } from '@/components/tasks/TaskList'
 import { useTaskActions } from '@/components/tasks/useTaskActions'
 import { ErrorState, PageHeader, PageLoader } from '@/components/ui/Misc'
 import { toISODate } from '@/lib/dates'
 import { PRIORITY_META } from '@/lib/meta'
 import { useTaskPanel } from '@/lib/taskPanel'
+import { useWorkspace } from '@/lib/workspaceContext'
 import { cn } from '@/lib/utils'
 import { format } from 'date-fns'
 
@@ -22,6 +29,7 @@ export function DashboardPage() {
   const { data: upcoming = [] } = useUpcoming(7)
   const { open } = useTaskPanel()
   const { toggleDone } = useTaskActions()
+  const { path, isShared } = useWorkspace()
 
   if (isLoading) return <PageLoader />
   if (error || !stats) return <ErrorState error={error} retry={() => refetch()} />
@@ -42,14 +50,20 @@ export function DashboardPage() {
           label="Open"
           value={stats.open}
           hint={`${stats.total} total`}
-          to="/tasks"
+          to={path('/tasks')}
         />
-        <StatCard icon={Sun} label="Due today" value={stats.due_today} to="/today" tone="warning" />
+        <StatCard
+          icon={Sun}
+          label="Due today"
+          value={stats.due_today}
+          to={path('/today')}
+          tone="warning"
+        />
         <StatCard
           icon={AlertTriangle}
           label="Overdue"
           value={stats.overdue}
-          to="/today"
+          to={path('/today')}
           tone={stats.overdue ? 'danger' : 'default'}
         />
         <StatCard
@@ -79,7 +93,7 @@ export function DashboardPage() {
           className="lg:col-span-2"
           action={
             <Link
-              to="/today"
+              to={path('/today')}
               className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
             >
               View all
@@ -118,7 +132,7 @@ export function DashboardPage() {
                   {openPriorities.map(({ p, n }) => (
                     <li key={p}>
                       <Link
-                        to={`/tasks?priority=${p}`}
+                        to={path(`/tasks?priority=${p}`)}
                         className="flex items-center gap-1.5 text-slate-600 hover:underline dark:text-slate-300"
                       >
                         <span className={cn('h-2 w-2 rounded-full', PRIORITY_META[p].dot)} />
@@ -137,11 +151,28 @@ export function DashboardPage() {
           <ProjectProgressList projects={stats.projects} />
         </Card>
 
+        {isShared && stats.members.length > 0 && (
+          <Card
+            title="Team load"
+            className="lg:col-span-3"
+            action={
+              <Link
+                to={path('/members')}
+                className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+              >
+                <Users className="h-3.5 w-3.5" /> Members
+              </Link>
+            }
+          >
+            <TeamLoad members={stats.members} />
+          </Card>
+        )}
+
         <Card
           title="Coming up"
           action={
             <Link
-              to="/upcoming"
+              to={path('/upcoming')}
               className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
             >
               Next 7 days

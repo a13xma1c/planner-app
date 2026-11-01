@@ -6,6 +6,7 @@ import { PRIORITIES, STATUSES, type TaskSort } from '@/api/types'
 import { useDebounced } from '@/lib/hooks'
 import { PRIORITY_META, SORT_META, STATUS_META } from '@/lib/meta'
 import { cn } from '@/lib/utils'
+import { useWorkspace } from '@/lib/workspaceContext'
 
 import { Button } from '../ui/Button'
 import { countActiveFilters, DEFAULT_FILTERS, type FilterState } from '@/lib/filters'
@@ -21,12 +22,19 @@ interface FilterBarProps {
   value: FilterState
   onChange: (next: FilterState) => void
   hideStatus?: boolean
+  hideAssignee?: boolean
 }
 
-export function FilterBar({ value, onChange, hideStatus = false }: FilterBarProps) {
+export function FilterBar({
+  value,
+  onChange,
+  hideStatus = false,
+  hideAssignee = false,
+}: FilterBarProps) {
   const [search, setSearch] = useState(value.search)
   const debounced = useDebounced(search, 250)
   const { data: tags = [] } = useTags()
+  const { members, isShared } = useWorkspace()
 
   useEffect(() => {
     if (debounced !== value.search) onChange({ ...value, search: debounced })
@@ -79,6 +87,23 @@ export function FilterBar({ value, onChange, hideStatus = false }: FilterBarProp
             </Button>
           )}
         </div>
+        {isShared && !hideAssignee && (
+          <Select
+            value={value.assignee}
+            onChange={(e) => onChange({ ...value, assignee: e.target.value })}
+            aria-label="Filter by assignee"
+            className="w-auto"
+          >
+            <option value="">Anyone</option>
+            <option value="me">Assigned to me</option>
+            <option value="none">Unassigned</option>
+            {members.map((m) => (
+              <option key={m.user.id} value={m.user.id}>
+                {m.user.display_name}
+              </option>
+            ))}
+          </Select>
+        )}
         <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
           <input
             type="checkbox"

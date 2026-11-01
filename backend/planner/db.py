@@ -7,7 +7,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -21,9 +21,14 @@ from planner.config import PACKAGE_DIR
 ALEMBIC_DIR = PACKAGE_DIR / "alembic"
 
 
-def _enable_sqlite_fks(dbapi_connection: object, _record: object) -> None:
+def _configure_sqlite(dbapi_connection: object, _record: object) -> None:
+    """Per-connection SQLite settings: FK enforcement, WAL for concurrent readers
+    (shared planners), and a busy timeout instead of immediate 'database is locked'."""
     cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.close()
 
 
@@ -35,7 +40,7 @@ def create_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
     engine = create_async_engine(database_url, echo=echo)
     if database_url.startswith("sqlite"):
-        event.listen(engine.sync_engine, "connect", _enable_sqlite_fks)
+        event.listen(engine.sync_engine, "connect", _configure_sqlite)
     return engine
 
 
@@ -66,6 +71,15 @@ class Database:
 
     async def migrate(self) -> None:
         await run_migrations(self.engine)
+
+    async def ping(self) -> bool:
+        """True when the database answers a trivial query."""
+        try:
+            async with self.engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        except Exception:
+            return False
+        return True
 
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.session_factory() as session:

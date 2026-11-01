@@ -9,6 +9,7 @@ import {
   type TaskCreate,
 } from '@/api/types'
 import { PRIORITY_META, RECURRENCE_META } from '@/lib/meta'
+import { useWorkspace } from '@/lib/workspaceContext'
 
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
@@ -35,6 +36,7 @@ export function TaskFormDialog({ open, onClose, defaults, onCreated }: TaskFormD
 function TaskForm({ onClose, defaults, onCreated }: Omit<TaskFormDialogProps, 'open'>) {
   const toast = useToast()
   const { data: projects = [] } = useProjects(false)
+  const { members, isShared } = useWorkspace()
   const [form, setForm] = useState<TaskCreate>({
     title: '',
     notes: '',
@@ -43,6 +45,7 @@ function TaskForm({ onClose, defaults, onCreated }: Omit<TaskFormDialogProps, 'o
     due_date: null,
     recurrence: null,
     estimate_minutes: null,
+    assignee_id: null,
     tags: [],
     subtasks: [],
     ...defaults,
@@ -150,6 +153,22 @@ function TaskForm({ onClose, defaults, onCreated }: Omit<TaskFormDialogProps, 'o
         <Field label="Tags" htmlFor="t-tags">
           <TagInput id="t-tags" value={form.tags ?? []} onChange={(tags) => set('tags', tags)} />
         </Field>
+        {isShared && (
+          <Field label="Assignee" htmlFor="t-assignee">
+            <Select
+              id="t-assignee"
+              value={form.assignee_id ?? ''}
+              onChange={(e) => set('assignee_id', e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">Unassigned</option>
+              {members.map((m) => (
+                <option key={m.user.id} value={m.user.id}>
+                  {m.user.display_name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
       </div>
       <Field label="Notes" htmlFor="t-notes">
         <Textarea

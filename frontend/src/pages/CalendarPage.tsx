@@ -8,6 +8,7 @@ import { useTaskActions } from '@/components/tasks/useTaskActions'
 import { ErrorState, PageHeader } from '@/components/ui/Misc'
 import { calendarRange, parseDate, toISODate } from '@/lib/dates'
 import { useTaskPanel } from '@/lib/taskPanel'
+import { useWorkspace } from '@/lib/workspaceContext'
 
 export function CalendarPage() {
   const [params, setParams] = useSearchParams()
@@ -29,6 +30,7 @@ export function CalendarPage() {
   })
   const { open } = useTaskPanel()
   const { patch } = useTaskActions()
+  const { path } = useWorkspace()
 
   const changeMonth = (d: Date) => {
     setMonth(d)
@@ -54,7 +56,7 @@ export function CalendarPage() {
         tasks={tasks}
         onOpen={open}
         onReschedule={(id, due) => patch(id, { due_date: due })}
-        onDayClick={(iso) => navigate(`/tasks?due=${iso}`)}
+        onDayClick={(iso) => navigate(path(`/tasks?due=${iso}`))}
       />
     </div>
   )

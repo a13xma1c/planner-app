@@ -23,6 +23,7 @@ describe('filters', () => {
       sort: 'title',
       order: 'desc',
       includeDone: true,
+      assignee: '',
     })
     expect(parseFilters(new URLSearchParams('sort=nope&order=sideways'))).toEqual(DEFAULT_FILTERS)
   })
@@ -59,7 +60,16 @@ describe('filters', () => {
       sort: 'smart',
       order: 'asc',
       include_done: false,
+      assigned_to_me: undefined,
+      unassigned: undefined,
+      assignee_id: undefined,
     })
+    expect(filtersToQuery({ ...DEFAULT_FILTERS, assignee: 'me' }).assigned_to_me).toBe(true)
+    expect(filtersToQuery({ ...DEFAULT_FILTERS, assignee: 'none' }).unassigned).toBe(true)
+    expect(filtersToQuery({ ...DEFAULT_FILTERS, assignee: '42' }).assignee_id).toBe(42)
+    const p = filtersToParams({ ...DEFAULT_FILTERS, assignee: 'me' }, new URLSearchParams())
+    expect(p.get('assignee')).toBe('me')
+    expect(parseFilters(p).assignee).toBe('me')
     expect(filtersToQuery({ ...DEFAULT_FILTERS, status: ['done'] }).include_done).toBe(true)
   })
 

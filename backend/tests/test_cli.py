@@ -27,7 +27,49 @@ def test_migrate(env: Path):
     assert "up to date" in result.output
 
 
+def test_create_user_and_list_users(env: Path):
+    result = runner.invoke(
+        app,
+        ["create-user", "Ann@Example.com", "--name", "Ann", "--password", "orbit-cactus-lantern-7"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Created user ann@example.com" in result.output
+    result = runner.invoke(app, ["users"])
+    assert result.exit_code == 0, result.output
+    assert "ann@example.com" in result.output
+    assert "Ann's planner (owner)" in result.output
+    # duplicates are reported as a clean error
+    result = runner.invoke(
+        app,
+        ["create-user", "ann@example.com", "--name", "Ann", "--password", "orbit-cactus-lantern-7"],
+    )
+    assert result.exit_code == 1
+    assert "already exists" in result.output
+
+
+def test_data_commands_need_an_account_or_an_explicit_target(env: Path):
+    result = runner.invoke(app, ["list"])
+    assert result.exit_code == 1
+    assert "create-user" in result.output
+    for email in ("a@example.com", "b@example.com"):
+        runner.invoke(
+            app, ["create-user", email, "--name", "x", "--password", "orbit-cactus-lantern-7"]
+        )
+    result = runner.invoke(app, ["list"])
+    assert result.exit_code == 1
+    assert "--user" in result.output
+    assert runner.invoke(app, ["list", "--user", "a@example.com"]).exit_code == 0
+    assert runner.invoke(app, ["list", "--workspace", "1"]).exit_code == 0
+    result = runner.invoke(app, ["list", "--user", "nobody@example.com"])
+    assert result.exit_code == 1
+    assert "No user" in result.output
+
+
 def test_import_legacy_then_list_and_export(env: Path):
+    runner.invoke(
+        app,
+        ["create-user", "me@example.com", "--name", "Me", "--password", "orbit-cactus-lantern-7"],
+    )
     legacy = env / "planner_data.json"
     legacy.write_text(
         json.dumps(

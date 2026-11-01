@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, timedelta
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from planner.models import Priority, Project, Status, Task
-from planner.schemas import DayCount, Overview, ProjectProgress
+from planner.models import Membership, Priority, Project, Status, Task, User
+from planner.schemas import DayCount, MemberLoad, Overview, ProjectProgress, UserPublic
 
 
-async def overview(session: AsyncSession, *, today: date | None = None) -> Overview:
+async def overview(
+    session: AsyncSession, workspace_id: int, *, today: date | None = None
+) -> Overview:
     today = today or date.today()
-    tasks = (await session.scalars(select(Task))).all()
+    tasks = (await session.scalars(select(Task).where(Task.workspace_id == workspace_id))).all()
 
     by_status = dict.fromkeys(Status, 0)
     by_priority = dict.fromkeys(Priority, 0)
@@ -56,9 +59,46 @@ async def overview(session: AsyncSession, *, today: date | None = None) -> Overv
         completion_rate=rate,
         completed_series=completed_series,
         created_series=created_series,
-        projects=await _project_progress(session),
+        projects=await _project_progress(session, workspace_id),
+        members=await _member_load(session, workspace_id, tasks, today),
         streak_days=_streak(set(completed_days), today),
     )
+
+
+async def _member_load(
+    session: AsyncSession, workspace_id: int, tasks: Sequence[Task], today: date
+) -> list[MemberLoad]:
+    """Open/overdue counts per assignee (only meaningful for shared planners)."""
+    members = (
+        await session.scalars(
+            select(Membership)
+            .join(User, User.id == Membership.user_id)
+            .where(Membership.workspace_id == workspace_id)
+            .order_by(User.display_name)
+        )
+    ).all()
+    if len(members) < 2:
+        return []
+    open_tasks = [t for t in tasks if t.status != Status.DONE]
+    result: list[MemberLoad] = []
+    for m in members:
+        mine = [t for t in open_tasks if t.assignee_id == m.user_id]
+        result.append(
+            MemberLoad(
+                user=UserPublic.model_validate(m.user),
+                open=len(mine),
+                overdue=sum(1 for t in mine if t.due_date is not None and t.due_date < today),
+            )
+        )
+    unassigned = [t for t in open_tasks if t.assignee_id is None]
+    result.append(
+        MemberLoad(
+            user=None,
+            open=len(unassigned),
+            overdue=sum(1 for t in unassigned if t.due_date is not None and t.due_date < today),
+        )
+    )
+    return result
 
 
 def _streak(completed_days: set[date], today: date) -> int:
@@ -71,15 +111,23 @@ def _streak(completed_days: set[date], today: date) -> int:
     return streak
 
 
-async def _project_progress(session: AsyncSession) -> list[ProjectProgress]:
-    stmt = select(
-        Task.project_id,
-        func.count(Task.id),
-        func.sum(case((Task.status == Status.DONE, 1), else_=0)),
-    ).group_by(Task.project_id)
+async def _project_progress(session: AsyncSession, workspace_id: int) -> list[ProjectProgress]:
+    stmt = (
+        select(
+            Task.project_id,
+            func.count(Task.id),
+            func.sum(case((Task.status == Status.DONE, 1), else_=0)),
+        )
+        .where(Task.workspace_id == workspace_id)
+        .group_by(Task.project_id)
+    )
     rows = (await session.execute(stmt)).all()
     counts = {pid: (int(total), int(done or 0)) for pid, total, done in rows}
-    projects = (await session.scalars(select(Project).order_by(Project.name))).all()
+    projects = (
+        await session.scalars(
+            select(Project).where(Project.workspace_id == workspace_id).order_by(Project.name)
+        )
+    ).all()
     result: list[ProjectProgress] = []
     if None in counts:
         total, done = counts[None]

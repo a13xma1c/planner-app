@@ -41,36 +41,56 @@ export function buildQuery(params: Query = {}): string {
   return s ? `?${s}` : ''
 }
 
+export const WORKSPACE_HEADER = 'X-Workspace-Id'
+
+/** Fired on `window` when the server rejects the session so the app can go to /login. */
+export const UNAUTHORIZED_EVENT = 'planner:unauthorized'
+
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   body?: unknown
   query?: Query
   signal?: AbortSignal
+  /** Workspace to operate on (sent as the X-Workspace-Id header). */
+  workspace?: number | null
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, query, signal } = options
+  const { method = 'GET', body, query, signal, workspace } = options
+  const headers: Record<string, string> = {}
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  if (workspace) headers[WORKSPACE_HEADER] = String(workspace)
   const response = await fetch(`${path}${buildQuery(query)}`, {
     method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     signal,
+    credentials: 'same-origin',
   })
   if (response.status === 204) return undefined as T
   const text = await response.text()
   const data: unknown = text ? JSON.parse(text) : null
   if (!response.ok) {
     const detail = (data as { detail?: unknown } | null)?.detail ?? data
+    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT))
+    }
     throw new ApiError(response.status, detail)
   }
   return data as T
 }
 
-export const api = {
-  get: <T>(path: string, query?: Query, signal?: AbortSignal) =>
-    request<T>(path, { query, signal }),
-  post: <T>(path: string, body?: unknown, query?: Query) =>
-    request<T>(path, { method: 'POST', body, query }),
-  patch: <T>(path: string, body: unknown) => request<T>(path, { method: 'PATCH', body }),
-  delete: <T = void>(path: string) => request<T>(path, { method: 'DELETE' }),
+/** Request helpers bound to a workspace (pass `null` for workspace-less endpoints). */
+export function scoped(workspace: number | null) {
+  return {
+    get: <T>(path: string, query?: Query, signal?: AbortSignal) =>
+      request<T>(path, { query, signal, workspace }),
+    post: <T>(path: string, body?: unknown, query?: Query) =>
+      request<T>(path, { method: 'POST', body, query, workspace }),
+    patch: <T>(path: string, body: unknown) =>
+      request<T>(path, { method: 'PATCH', body, workspace }),
+    delete: <T = void>(path: string) => request<T>(path, { method: 'DELETE', workspace }),
+  }
 }
+
+export const api = scoped(null)

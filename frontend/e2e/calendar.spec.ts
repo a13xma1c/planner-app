@@ -1,12 +1,8 @@
-import { expect, test } from '@playwright/test'
-
-import { createTask, getTask, isoDaysFromNow, resetDatabase } from './helpers'
-
-test.beforeEach(async ({ request }) => resetDatabase(request))
+import { createTask, expect, getTask, isoDaysFromNow, test } from './fixtures'
 
 test('shows tasks on their due day, navigates months and reschedules by drag', async ({
   page,
-  request,
+  ws,
 }) => {
   // Pick a date safely inside the current month so the drop target is on the same grid.
   const now = new Date()
@@ -14,9 +10,9 @@ test('shows tasks on their due day, navigates months and reschedules by drag', a
   const iso = (d: number) => `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(d)}`
   const from = iso(10)
   const to = iso(11)
-  const task = await createTask(request, { title: 'Dentist', due_date: from })
+  const task = await createTask(page.request, { title: 'Dentist', due_date: from })
 
-  await page.goto('/calendar')
+  await page.goto(`${ws}/calendar`)
   await expect(
     page.getByTestId(`day-${from}`).getByRole('button', { name: 'Dentist' }),
   ).toBeVisible()
@@ -39,7 +35,7 @@ test('shows tasks on their due day, navigates months and reschedules by drag', a
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 10 })
   await page.mouse.up()
   await expect(page.getByTestId(`day-${to}`).getByRole('button', { name: 'Dentist' })).toBeVisible()
-  await expect.poll(async () => (await getTask(request, task.id)).due_date).toBe(to)
+  await expect.poll(async () => (await getTask(page.request, task.id)).due_date).toBe(to)
 
   // clicking a day lists everything due that day
   await page.getByTestId(`day-${to}`).getByRole('button', { name: /^11 / }).click()
@@ -47,10 +43,10 @@ test('shows tasks on their due day, navigates months and reschedules by drag', a
   await expect(page.getByTestId('task-row').filter({ hasText: 'Dentist' })).toBeVisible()
 })
 
-test('today view separates overdue tasks', async ({ page, request }) => {
-  await createTask(request, { title: 'Late', due_date: isoDaysFromNow(-2) })
-  await createTask(request, { title: 'Now', due_date: isoDaysFromNow(0) })
-  await page.goto('/today')
+test('today view separates overdue tasks', async ({ page, ws }) => {
+  await createTask(page.request, { title: 'Late', due_date: isoDaysFromNow(-2) })
+  await createTask(page.request, { title: 'Now', due_date: isoDaysFromNow(0) })
+  await page.goto(`${ws}/today`)
   await expect(page.getByRole('region', { name: 'Overdue' })).toContainText('Late')
   await expect(page.getByRole('region', { name: 'Today' })).toContainText('Now')
 })

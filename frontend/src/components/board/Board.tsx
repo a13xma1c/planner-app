@@ -18,16 +18,19 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { CheckSquare, GripVertical } from 'lucide-react'
+import { CheckSquare, GripVertical, Plus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
-import { useReorder } from '@/api/queries'
+import { useCreateTask, useReorder } from '@/api/queries'
 import { STATUSES, type Status, type Task } from '@/api/types'
 import { STATUS_META } from '@/lib/meta'
 import { cn } from '@/lib/utils'
+import { useWorkspace } from '@/lib/workspaceContext'
 
 import { DueBadge, PriorityBadge, ProjectDot, TagChip } from '../tasks/badges'
+import { AssigneeChip } from '../workspace/Avatar'
 import { useToast } from '../ui/toastContext'
+import { Input } from '../ui/Input'
 
 type Columns = Record<Status, Task[]>
 
@@ -189,6 +192,7 @@ function Column({
           )}
         </ul>
       </SortableContext>
+      <ColumnQuickAdd status={status} />
     </section>
   )
 }
@@ -279,8 +283,62 @@ function CardBody({
           {task.tags.slice(0, 3).map((t) => (
             <TagChip key={t.id} tag={t} />
           ))}
+          <AssigneeChip user={task.assignee} />
         </div>
       </button>
     </div>
+  )
+}
+
+/** "+ Add task" at the bottom of a column; creates the task directly in that status. */
+function ColumnQuickAdd({ status }: { status: Status }) {
+  const { canEdit } = useWorkspace()
+  const toast = useToast()
+  const [open, setOpen] = useState(false)
+  const [title, setTitle] = useState('')
+  const create = useCreateTask({
+    onSuccess: () => setTitle(''),
+    onError: (e) => toast.error('Could not add task', e.message),
+  })
+  if (!canEdit) return null
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-1 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs text-slate-500 hover:bg-white hover:text-slate-800 dark:hover:bg-slate-900 dark:hover:text-slate-100"
+        data-testid={`add-to-${status}`}
+      >
+        <Plus className="h-3.5 w-3.5" /> Add task
+      </button>
+    )
+  }
+  return (
+    <form
+      className="mt-1 p-1"
+      onSubmit={(e) => {
+        e.preventDefault()
+        const t = title.trim()
+        if (t) create.mutate({ title: t, status })
+      }}
+    >
+      <Input
+        // focus on mount: the user just pressed "Add task" in this column
+        ref={(el) => el?.focus()}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            setOpen(false)
+            setTitle('')
+          }
+        }}
+        onBlur={() => !title.trim() && setOpen(false)}
+        placeholder={`New task in ${STATUS_META[status].label.toLowerCase()}…`}
+        aria-label={`New task in ${STATUS_META[status].label}`}
+        disabled={create.isPending}
+        className="text-sm"
+      />
+    </form>
   )
 }

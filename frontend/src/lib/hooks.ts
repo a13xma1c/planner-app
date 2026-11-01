@@ -43,7 +43,8 @@ export function useLocalStorage<T>(
 export type Hotkey = {
   /** e.g. "n", "/", "shift+?", "mod+k" */
   combo: string
-  handler: (event: KeyboardEvent) => void
+  /** Return `false` to decline the event (it stays available to other hotkeys). */
+  handler: (event: KeyboardEvent) => void | boolean
   /** Allow firing while typing in inputs (default false). */
   allowInInput?: boolean
 }
@@ -81,8 +82,8 @@ export function useHotkeys(hotkeys: Hotkey[]): void {
       for (const hk of ref.current) {
         if (!hk.allowInInput && isEditable(event.target)) continue
         if (matchesCombo(event, hk.combo)) {
+          if (hk.handler(event) === false) continue
           event.preventDefault()
-          hk.handler(event)
           return
         }
       }

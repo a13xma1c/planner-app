@@ -1,15 +1,30 @@
-import { Download, Monitor, Moon, Sun, Upload } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { Download, KeyRound, LogOut, Monitor, Moon, Sun, Upload } from 'lucide-react'
+import { useMemo, useRef, useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router'
 
-import { downloadExport, useHealth, useImportBundle, useImportLegacy } from '@/api/queries'
+import {
+  downloadExport,
+  useChangePassword,
+  useHealth,
+  useImportBundle,
+  useImportLegacy,
+  useLogout,
+  useRevokeOtherSessions,
+  useSessions,
+  useUpdateProfile,
+} from '@/api/queries'
 import type { ImportResult } from '@/api/types'
+import { PasswordField } from '@/components/auth/PasswordField'
 import { Card } from '@/components/dashboard/widgets'
 import { Button } from '@/components/ui/Button'
+import { Field, Input } from '@/components/ui/Input'
 import { ConfirmDialog } from '@/components/ui/Dialog'
 import { PageHeader } from '@/components/ui/Misc'
 import { useToast } from '@/components/ui/toastContext'
 import { useTheme, type Theme } from '@/lib/themeContext'
+import { evaluatePassword } from '@/lib/password'
 import { cn } from '@/lib/utils'
+import { useWorkspace } from '@/lib/workspaceContext'
 
 const THEMES: { value: Theme; label: string; icon: typeof Sun }[] = [
   { value: 'light', label: 'Light', icon: Sun },
@@ -29,6 +44,7 @@ function describeImport(r: ImportResult): string {
 export function SettingsPage() {
   const { theme, setTheme } = useTheme()
   const toast = useToast()
+  const { workspace, canEdit } = useWorkspace()
   const { data: health } = useHealth()
   const [pendingReplace, setPendingReplace] = useState<unknown | null>(null)
   const [exporting, setExporting] = useState(false)
@@ -64,7 +80,7 @@ export function SettingsPage() {
   const onExport = async () => {
     setExporting(true)
     try {
-      await downloadExport()
+      await downloadExport(workspace.id, workspace.name)
     } catch (e) {
       toast.error('Export failed', e instanceof Error ? e.message : undefined)
     } finally {
@@ -75,6 +91,8 @@ export function SettingsPage() {
   return (
     <div className="space-y-4">
       <PageHeader title="Settings" />
+
+      <AccountCard />
 
       <Card title="Appearance">
         <div className="flex gap-2" role="radiogroup" aria-label="Theme">
@@ -98,10 +116,10 @@ export function SettingsPage() {
         </div>
       </Card>
 
-      <Card title="Backup & restore">
+      <Card title={`Backup & restore · ${workspace.name}`}>
         <div className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p>Download everything (projects, tags, tasks, checklists) as a JSON file.</p>
+            <p>Download this planner (projects, tags, tasks, checklists) as a JSON file.</p>
             <Button
               variant="outline"
               onClick={onExport}
@@ -111,73 +129,79 @@ export function SettingsPage() {
               <Download className="h-4 w-4" /> Export JSON
             </Button>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-            <p>
-              Restore from an export. <strong>Merge</strong> keeps existing data;{' '}
-              <strong>Replace</strong> wipes it first.
-            </p>
-            <div className="flex gap-2">
+          {canEdit && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+              <p>
+                Restore from an export. <strong>Merge</strong> keeps existing data;{' '}
+                <strong>Replace</strong> wipes it first.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  ref={bundleInput}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  data-testid="import-bundle-input"
+                  onChange={() =>
+                    pick(bundleInput.current, (data) => {
+                      if (bundleInput.current?.dataset.mode === 'replace') setPendingReplace(data)
+                      else importBundle.mutate({ bundle: data, replace: false })
+                    })
+                  }
+                />
+                <Button
+                  variant="outline"
+                  loading={importBundle.isPending}
+                  onClick={() => {
+                    if (bundleInput.current) {
+                      bundleInput.current.dataset.mode = 'merge'
+                      bundleInput.current.click()
+                    }
+                  }}
+                >
+                  <Upload className="h-4 w-4" /> Import (merge)
+                </Button>
+                <Button
+                  variant="danger"
+                  loading={importBundle.isPending}
+                  onClick={() => {
+                    if (bundleInput.current) {
+                      bundleInput.current.dataset.mode = 'replace'
+                      bundleInput.current.click()
+                    }
+                  }}
+                >
+                  Import (replace)
+                </Button>
+              </div>
+            </div>
+          )}
+          {canEdit && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+              <p>
+                Migrating from the old command-line planner? Import its{' '}
+                <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">
+                  planner_data.json
+                </code>
+                .
+              </p>
               <input
-                ref={bundleInput}
+                ref={legacyInput}
                 type="file"
                 accept="application/json,.json"
                 className="hidden"
-                data-testid="import-bundle-input"
-                onChange={() =>
-                  pick(bundleInput.current, (data) => {
-                    if (bundleInput.current?.dataset.mode === 'replace') setPendingReplace(data)
-                    else importBundle.mutate({ bundle: data, replace: false })
-                  })
-                }
+                data-testid="import-legacy-input"
+                onChange={() => pick(legacyInput.current, (data) => importLegacy.mutate(data))}
               />
               <Button
                 variant="outline"
-                loading={importBundle.isPending}
-                onClick={() => {
-                  if (bundleInput.current) {
-                    bundleInput.current.dataset.mode = 'merge'
-                    bundleInput.current.click()
-                  }
-                }}
+                loading={importLegacy.isPending}
+                onClick={() => legacyInput.current?.click()}
               >
-                <Upload className="h-4 w-4" /> Import (merge)
-              </Button>
-              <Button
-                variant="danger"
-                loading={importBundle.isPending}
-                onClick={() => {
-                  if (bundleInput.current) {
-                    bundleInput.current.dataset.mode = 'replace'
-                    bundleInput.current.click()
-                  }
-                }}
-              >
-                Import (replace)
+                <Upload className="h-4 w-4" /> Import legacy file
               </Button>
             </div>
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-            <p>
-              Migrating from the old command-line planner? Import its{' '}
-              <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">planner_data.json</code>
-              .
-            </p>
-            <input
-              ref={legacyInput}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              data-testid="import-legacy-input"
-              onChange={() => pick(legacyInput.current, (data) => importLegacy.mutate(data))}
-            />
-            <Button
-              variant="outline"
-              loading={importLegacy.isPending}
-              onClick={() => legacyInput.current?.click()}
-            >
-              <Upload className="h-4 w-4" /> Import legacy file
-            </Button>
-          </div>
+          )}
           {lastResult && (
             <div
               className="rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-900"
@@ -233,5 +257,131 @@ export function SettingsPage() {
         confirmLabel="Replace everything"
       />
     </div>
+  )
+}
+
+function AccountCard() {
+  const { me } = useWorkspace()
+  const toast = useToast()
+  const navigate = useNavigate()
+  const [name, setName] = useState(me.display_name)
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const context = useMemo(() => ({ email: me.email, displayName: me.display_name }), [me])
+  const report = useMemo(() => evaluatePassword(next, context), [next, context])
+  const { data: sessions = [] } = useSessions()
+  const profile = useUpdateProfile({
+    onSuccess: () => toast.success('Name updated'),
+    onError: (e) => toast.error('Could not update name', e.message),
+  })
+  const password = useChangePassword({
+    onSuccess: () => {
+      toast.success('Password changed')
+      setCurrent('')
+      setNext('')
+    },
+    onError: (e) => toast.error('Could not change password', e.message),
+  })
+  const revoke = useRevokeOtherSessions({
+    onSuccess: (r) =>
+      toast.success(`Signed out ${r.revoked} other device${r.revoked === 1 ? '' : 's'}`),
+  })
+  const logout = useLogout({ onSuccess: () => navigate('/login', { replace: true }) })
+
+  const saveName = (e: FormEvent) => {
+    e.preventDefault()
+    if (name.trim() && name.trim() !== me.display_name)
+      profile.mutate({ display_name: name.trim() })
+  }
+  const savePassword = (e: FormEvent) => {
+    e.preventDefault()
+    if (!report.ok) return
+    password.mutate({ current_password: current, new_password: next })
+  }
+  const others = sessions.filter((s) => !s.is_current).length
+
+  return (
+    <Card
+      title="Account"
+      action={
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => logout.mutate()}
+          data-testid="logout-button"
+        >
+          <LogOut className="h-3.5 w-3.5" /> Sign out
+        </Button>
+      }
+    >
+      <div className="grid gap-6 md:grid-cols-2">
+        <form onSubmit={saveName} className="space-y-3" data-testid="profile-form">
+          <Field label="Display name" htmlFor="acc-name">
+            <Input
+              id="acc-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={100}
+              required
+            />
+          </Field>
+          <Field label="Email" htmlFor="acc-email">
+            <Input id="acc-email" value={me.email} readOnly disabled />
+          </Field>
+          <Button
+            type="submit"
+            variant="outline"
+            size="sm"
+            loading={profile.isPending}
+            disabled={!name.trim() || name.trim() === me.display_name}
+          >
+            Save name
+          </Button>
+        </form>
+        <form onSubmit={savePassword} className="space-y-3" data-testid="password-form">
+          <PasswordField
+            id="acc-current"
+            label="Current password"
+            value={current}
+            onChange={setCurrent}
+            autoComplete="current-password"
+            showStrength={false}
+          />
+          <PasswordField
+            id="acc-new"
+            label="New password"
+            value={next}
+            onChange={setNext}
+            report={report}
+            context={context}
+          />
+          <Button
+            type="submit"
+            variant="outline"
+            size="sm"
+            loading={password.isPending}
+            disabled={!current || !report.ok}
+          >
+            <KeyRound className="h-3.5 w-3.5" /> Change password
+          </Button>
+        </form>
+      </div>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
+        <p>
+          {others === 0
+            ? 'You are only signed in on this device.'
+            : `Signed in on ${others} other device${others === 1 ? '' : 's'}.`}
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => revoke.mutate()}
+          disabled={others === 0}
+          loading={revoke.isPending}
+        >
+          Sign out other devices
+        </Button>
+      </div>
+    </Card>
   )
 }

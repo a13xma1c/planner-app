@@ -30,6 +30,9 @@ const env = {
   PLANNER_FRONTEND_DIST: join(frontend, 'dist'),
   PLANNER_HOST: '127.0.0.1',
   PLANNER_PORT: port,
+  // Every test signs up a fresh account from the same IP; the backend suite covers throttling.
+  PLANNER_REGISTER_ATTEMPTS_PER_HOUR: '100000',
+  PLANNER_LOGIN_ATTEMPTS_PER_MINUTE: '100000',
 }
 
 // Prefer the project venv; fall back to `uv run`.

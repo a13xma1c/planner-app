@@ -59,3 +59,6 @@ clean: ## Remove build artefacts and caches
 	rm -rf $(FRONTEND)/dist $(FRONTEND)/coverage $(FRONTEND)/playwright-report $(FRONTEND)/test-results
 	find . -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
 	rm -rf $(BACKEND)/.pytest_cache $(BACKEND)/.mypy_cache $(BACKEND)/.ruff_cache $(BACKEND)/.coverage
+
+password-list: ## Regenerate the frontend copy of the common-password blocklist from the backend file
+	python3 scripts/sync_password_list.py

@@ -1,4 +1,15 @@
-import type { Overview, Project, Subtask, Tag, Task } from '@/api/types'
+import type {
+  Comment,
+  Invitation,
+  Member,
+  Overview,
+  Project,
+  Subtask,
+  Tag,
+  Task,
+  User,
+  WorkspaceSummary,
+} from '@/api/types'
 
 let seq = 1000
 export const nextId = () => ++seq
@@ -46,9 +57,75 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     completed_at: null,
     created_at: NOW,
     updated_at: NOW,
+    assignee_id: null,
+    assignee: null,
+    created_by: null,
+    comment_count: 0,
     tags: [],
     subtasks: [],
     is_overdue: false,
+    ...overrides,
+  }
+}
+
+export function makeUser(overrides: Partial<User> = {}): User {
+  const id = overrides.id ?? nextId()
+  return { id, email: `user${id}@example.com`, display_name: `User ${id}`, ...overrides }
+}
+
+export function makeWorkspace(overrides: Partial<WorkspaceSummary> = {}): WorkspaceSummary {
+  const id = overrides.id ?? nextId()
+  return {
+    id,
+    name: `Workspace ${id}`,
+    is_personal: false,
+    created_at: NOW,
+    role: 'owner',
+    member_count: 1,
+    open_task_count: 0,
+    ...overrides,
+  }
+}
+
+export function makeMember(user: User, overrides: Partial<Member> = {}): Member {
+  return {
+    user: { id: user.id, display_name: user.display_name },
+    role: 'editor',
+    joined_at: NOW,
+    ...overrides,
+  }
+}
+
+export function makeInvitation(overrides: Partial<Invitation> = {}): Invitation {
+  const id = overrides.id ?? nextId()
+  return {
+    id,
+    token: `token-${id}`,
+    role: 'editor',
+    email: null,
+    created_at: NOW,
+    expires_at: '2099-01-01T00:00:00',
+    max_uses: null,
+    use_count: 0,
+    revoked_at: null,
+    is_valid: true,
+    ...overrides,
+  }
+}
+
+export function makeComment(
+  taskId: number,
+  author: User,
+  overrides: Partial<Comment> = {},
+): Comment {
+  const id = overrides.id ?? nextId()
+  return {
+    id,
+    task_id: taskId,
+    author: { id: author.id, display_name: author.display_name },
+    body: `Comment ${id}`,
+    created_at: NOW,
+    updated_at: NOW,
     ...overrides,
   }
 }
@@ -73,6 +150,7 @@ export function makeOverview(overrides: Partial<Overview> = {}): Overview {
     completed_series: days.map((day) => ({ day, count: 0 })),
     created_series: days.map((day) => ({ day, count: 0 })),
     projects: [],
+    members: [],
     streak_days: 0,
     ...overrides,
   }

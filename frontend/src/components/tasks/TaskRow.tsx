@@ -1,10 +1,11 @@
-import { CheckSquare, GripVertical, MessageSquareText } from 'lucide-react'
+import { CheckSquare, GripVertical, MessageSquare, MessageSquareText } from 'lucide-react'
 import { memo } from 'react'
 
 import type { Task } from '@/api/types'
 import { cn } from '@/lib/utils'
 
 import { Checkbox } from '../ui/Checkbox'
+import { AssigneeChip } from '../workspace/Avatar'
 import { DueBadge, EstimateBadge, PriorityBadge, ProjectDot, StatusBadge, TagChip } from './badges'
 
 interface TaskRowProps {
@@ -15,6 +16,11 @@ interface TaskRowProps {
   onToggleSelect?: (id: number) => void
   showProject?: boolean
   dragHandle?: boolean
+  /** When false, completion/selection controls are disabled (viewer role). */
+  canEdit?: boolean
+  /** Keyboard cursor highlight. */
+  focused?: boolean
+  onHover?: (id: number) => void
 }
 
 export const TaskRow = memo(function TaskRow({
@@ -25,6 +31,9 @@ export const TaskRow = memo(function TaskRow({
   onToggleSelect,
   showProject = true,
   dragHandle = false,
+  canEdit = true,
+  focused = false,
+  onHover,
 }: TaskRowProps) {
   const done = task.status === 'done'
   const subDone = task.subtasks.filter((s) => s.is_done).length
@@ -33,15 +42,17 @@ export const TaskRow = memo(function TaskRow({
     <li
       data-testid="task-row"
       data-task-id={task.id}
+      data-focused={focused || undefined}
       className={cn(
         'group flex items-start gap-3 rounded-lg border border-transparent px-3 py-2.5 transition-colors',
         'hover:bg-slate-50 dark:hover:bg-slate-800/60',
         selected &&
           'border-indigo-200 bg-indigo-50/60 dark:border-indigo-500/40 dark:bg-indigo-500/10',
+        focused && 'ring-2 ring-inset ring-indigo-400',
       )}
     >
       {dragHandle && <GripVertical className="mt-1 h-4 w-4 text-slate-300" aria-hidden />}
-      {onToggleSelect && (
+      {onToggleSelect && canEdit && (
         <Checkbox
           checked={selected}
           onChange={() => onToggleSelect(task.id)}
@@ -58,10 +69,12 @@ export const TaskRow = memo(function TaskRow({
         onChange={() => onToggleDone(task)}
         label={done ? `Reopen ${task.title}` : `Complete ${task.title}`}
         className="mt-0.5"
+        disabled={!canEdit}
       />
       <button
         type="button"
         onClick={() => onOpen(task.id)}
+        onMouseEnter={onHover ? () => onHover(task.id) : undefined}
         className="min-w-0 flex-1 text-left focus-visible:outline-none"
         aria-label={`Open ${task.title}`}
       >
@@ -96,6 +109,16 @@ export const TaskRow = memo(function TaskRow({
           {task.tags.map((t) => (
             <TagChip key={t.id} tag={t} />
           ))}
+          {task.comment_count > 0 && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-slate-500"
+              aria-label={`${task.comment_count} comments`}
+            >
+              <MessageSquare className="h-3 w-3" />
+              {task.comment_count}
+            </span>
+          )}
+          <AssigneeChip user={task.assignee} />
         </div>
       </button>
     </li>

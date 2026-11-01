@@ -1,11 +1,7 @@
-import { expect, test } from '@playwright/test'
+import { createTask, expect, test } from './fixtures'
 
-import { createTask, resetDatabase } from './helpers'
-
-test.beforeEach(async ({ request }) => resetDatabase(request))
-
-test('dark mode persists across reloads', async ({ page }) => {
-  await page.goto('/settings')
+test('dark mode persists across reloads', async ({ page, ws }) => {
+  await page.goto(`${ws}/settings`)
   await page.getByRole('radio', { name: 'Dark' }).click()
   await expect(page.locator('html')).toHaveClass(/dark/)
   await page.reload()
@@ -14,20 +10,20 @@ test('dark mode persists across reloads', async ({ page }) => {
   await expect(page.locator('html')).not.toHaveClass(/dark/)
 })
 
-test('export downloads a bundle that can be re-imported', async ({ page, request }) => {
-  await createTask(request, { title: 'Keep me', tags: ['x'], subtasks: ['s'] })
-  await page.goto('/settings')
+test('export downloads a bundle that can be re-imported', async ({ page, ws }) => {
+  const task = await createTask(page.request, { title: 'Keep me', tags: ['x'], subtasks: ['s'] })
+  await page.goto(`${ws}/settings`)
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     page.getByTestId('export-button').click(),
   ])
-  expect(download.suggestedFilename()).toMatch(/planner-export-\d{4}-\d{2}-\d{2}\.json/)
+  expect(download.suggestedFilename()).toMatch(/planner-.+-\d{4}-\d{2}-\d{2}\.json/)
   const path = await download.path()
   const { readFile } = await import('node:fs/promises')
   const bundle = JSON.parse(await readFile(path!, 'utf8'))
   expect(bundle.tasks).toHaveLength(1)
 
-  await resetDatabase(request)
+  await page.request.delete(`/api/tasks/${task.id}`)
   await page.getByRole('button', { name: 'Import (merge)' }).click()
   await page.getByTestId('import-bundle-input').setInputFiles({
     name: 'bundle.json',
@@ -35,13 +31,13 @@ test('export downloads a bundle that can be re-imported', async ({ page, request
     buffer: Buffer.from(JSON.stringify(bundle)),
   })
   await expect(page.getByTestId('import-result')).toContainText('1 tasks')
-  const tasks = await (await request.get('/api/tasks')).json()
+  const tasks = await (await page.request.get('/api/tasks')).json()
   expect(tasks[0].title).toBe('Keep me')
   expect(tasks[0].subtasks).toHaveLength(1)
 })
 
-test('legacy CLI data can be imported', async ({ page }) => {
-  await page.goto('/settings')
+test('legacy CLI data can be imported', async ({ page, ws }) => {
+  await page.goto(`${ws}/settings`)
   const legacy = {
     tasks: [
       {
@@ -66,6 +62,6 @@ test('legacy CLI data can be imported', async ({ page }) => {
   })
   await expect(page.getByTestId('import-result')).toContainText('2 tasks, 1 projects')
   await expect(page.getByTestId('sidebar-projects')).toContainText('Work')
-  await page.goto('/tasks?done=1')
+  await page.goto(`${ws}/tasks?done=1`)
   await expect(page.getByTestId('task-row')).toHaveCount(2)
 })

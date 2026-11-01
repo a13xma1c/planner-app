@@ -19,3 +19,19 @@ class ConflictError(PlannerError):
 
 class ValidationError(PlannerError):
     """The request was well-formed but semantically invalid."""
+
+
+class UnauthorizedError(PlannerError):
+    """No valid session."""
+
+
+class ForbiddenError(PlannerError):
+    """The user is authenticated but not allowed to do this."""
+
+
+class RateLimitedError(PlannerError):
+    """Too many attempts; ``retry_after`` is in seconds."""
+
+    def __init__(self, message: str, retry_after: float) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after

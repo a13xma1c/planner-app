@@ -17,6 +17,8 @@ export interface FilterState {
   sort: TaskSort
   order: 'asc' | 'desc'
   includeDone: boolean
+  /** 'me' | 'none' | user id as string | '' (anyone) */
+  assignee: string
 }
 
 export const DEFAULT_FILTERS: FilterState = {
@@ -27,6 +29,7 @@ export const DEFAULT_FILTERS: FilterState = {
   sort: 'smart',
   order: 'asc',
   includeDone: false,
+  assignee: '',
 }
 
 export function filtersToQuery(f: FilterState): TaskFilters {
@@ -38,6 +41,9 @@ export function filtersToQuery(f: FilterState): TaskFilters {
     sort: f.sort,
     order: f.order,
     include_done: f.status.length ? true : f.includeDone,
+    assigned_to_me: f.assignee === 'me' || undefined,
+    unassigned: f.assignee === 'none' || undefined,
+    assignee_id: /^\d+$/.test(f.assignee) ? Number(f.assignee) : undefined,
   }
 }
 
@@ -53,12 +59,14 @@ export function parseFilters(params: URLSearchParams): FilterState {
     sort: sort && sort in SORT_META ? sort : 'smart',
     order: params.get('order') === 'desc' ? 'desc' : 'asc',
     includeDone: params.get('done') === '1',
+    assignee: params.get('assignee') ?? '',
   }
 }
 
 export function filtersToParams(f: FilterState, base: URLSearchParams): URLSearchParams {
   const p = new URLSearchParams(base)
-  for (const k of ['q', 'status', 'priority', 'tag', 'sort', 'order', 'done']) p.delete(k)
+  for (const k of ['q', 'status', 'priority', 'tag', 'sort', 'order', 'done', 'assignee'])
+    p.delete(k)
   if (f.search) p.set('q', f.search)
   f.status.forEach((s) => p.append('status', s))
   f.priority.forEach((s) => p.append('priority', s))
@@ -66,6 +74,7 @@ export function filtersToParams(f: FilterState, base: URLSearchParams): URLSearc
   if (f.sort !== 'smart') p.set('sort', f.sort)
   if (f.order !== 'asc') p.set('order', f.order)
   if (f.includeDone) p.set('done', '1')
+  if (f.assignee) p.set('assignee', f.assignee)
   return p
 }
 
@@ -75,6 +84,7 @@ export function countActiveFilters(f: FilterState): number {
     f.status.length +
     f.priority.length +
     f.tag.length +
-    (f.includeDone ? 1 : 0)
+    (f.includeDone ? 1 : 0) +
+    (f.assignee ? 1 : 0)
   )
 }
