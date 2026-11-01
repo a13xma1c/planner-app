@@ -1,0 +1,31 @@
+# Optional but recommended: `pip install pre-commit && pre-commit install`
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-added-large-files
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (backend)
+        entry: bash -c 'cd backend && uv run mypy planner'
+        language: system
+        pass_filenames: false
+        files: ^backend/.*\.py$
+      - id: frontend-lint
+        name: oxlint + prettier (frontend)
+        entry: bash -c 'cd frontend && npx oxlint && npx prettier --check src e2e'
+        language: system
+        pass_filenames: false
+        files: ^frontend/

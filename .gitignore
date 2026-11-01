@@ -1,0 +1,31 @@
+# Editors
+.idea
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+backend/.env
+
+# Local data
+*.db
+*.db-journal
+planner_data.json
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+*.local
